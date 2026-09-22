@@ -82,6 +82,13 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
       ...(node.disallowedTools ?? defaults.disallowedTools ?? []),
     ],
     ...(Object.keys(connectors).length > 0 ? { mcpServers: connectors } : {}),
+    // A packaged desktop app cannot let the SDK resolve its own binary: the
+    // path it derives lands inside app.asar, which is an archive rather than a
+    // directory, and spawning it fails with ENOTDIR. The host sets this to the
+    // real unpacked path. Empty everywhere else, where self-resolution is right.
+    ...(process.env.SKILLFLOW_CLAUDE_PATH
+      ? { pathToClaudeCodeExecutable: process.env.SKILLFLOW_CLAUDE_PATH }
+      : {}),
   };
 
   const artifactsOut: Artifact[] = [];

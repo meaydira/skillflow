@@ -7,7 +7,7 @@
   "bin": {
     "skillflow": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
+  "main": "./dist/cli.js",
   "files": [
     "dist",
     "web",
@@ -22,7 +22,9 @@
     "prepublishOnly": "npm run build",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "board": "tsx src/cli.ts ui"
+    "board": "tsx src/cli.ts ui",
+    "desktop": "npm run build && electron desktop/main.js",
+    "dist": "npm run build && electron-builder --mac"
   },
   "keywords": [
     "claude",
@@ -41,6 +43,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "electron": "^44.4.4",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"
   },
@@ -55,5 +59,46 @@
   "homepage": "https://github.com/meaydira/skillflow#readme",
   "bugs": {
     "url": "https://github.com/meaydira/skillflow/issues"
+  },
+  "build": {
+    "appId": "ai.skillflow.desktop",
+    "productName": "skillflow",
+    "extraMetadata": {
+      "main": "desktop/main.js"
+    },
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "web/**/*",
+      "desktop/**/*",
+      "workflows/**/*",
+      "examples/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null
+    },
+    "asarUnpack": [
+      "**/node_modules/@anthropic-ai/**"
+    ]
   }
 }

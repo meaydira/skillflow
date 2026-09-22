@@ -6,3 +6,6 @@ dist/
 
 # Your real workflows: company specifics, not for the public repo.
 private-workflows/
+
+# Build output
+release/

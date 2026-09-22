@@ -28,6 +28,25 @@ leaves your machine except the model calls.
 
 ## Install
 
+### Desktop app (macOS)
+
+```bash
+git clone https://github.com/meaydira/skillflow && cd skillflow
+npm install && npm run dist
+```
+
+That produces `release/mac-arm64/skillflow.app`. Drag it to Applications and
+open it. The app bundles its own Claude Code, so nothing else needs installing,
+but it does need to be signed in once (see below).
+
+It keeps its tasks and runs in a workspace folder, `~/skillflow` by default.
+Change it from the skillflow menu, or point it at a folder you already have.
+
+Unsigned, so a copy you build yourself opens normally, but a copy you send
+someone else will be stopped by Gatekeeper until it is signed and notarised.
+
+### Command line
+
 ```bash
 git clone https://github.com/meaydira/skillflow && cd skillflow
 npm install && npm run build && npm link
@@ -36,16 +55,21 @@ npm install && npm run build && npm link
 `npm link` puts `skillflow` on your PATH. Skip it and use `npx tsx src/cli.ts`
 in place of `skillflow` everywhere below.
 
-You also need Claude Code authenticated, because skillflow spawns it:
+### Signing in
+
+Either way, Claude Code has to be authenticated once:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 claude auth login
 ```
 
-An `ANTHROPIC_API_KEY` in the environment works instead. Note that skillflow
-cannot borrow the credentials of a Claude desktop session, so run it from a
-terminal or from cron rather than from inside another agent.
+An `ANTHROPIC_API_KEY` in the environment works instead. The login is stored in
+your keychain and shared with the desktop app, so this is a one-time step.
+
+skillflow cannot borrow the credentials of a Claude desktop session, so run it
+from a terminal, from the app, or from cron, rather than from inside another
+agent.
 
 ## Try it
 
