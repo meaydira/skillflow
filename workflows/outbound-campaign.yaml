@@ -1,0 +1,116 @@
+# Research, draft, review, then send.
+#
+# The gate on `sequence` is the whole point. Everything before it is reversible.
+# The moment outreach leaves the building it is not, and no amount of careful
+# prompting downstream gets it back. So the copy is drafted as a changeset, a
+# human reads the actual words, and a separate node pushes it unchanged.
+
+name: outbound-campaign
+description: Prospect research and first-touch outreach, gated before anything sends.
+
+inputs:
+  owner:
+    description: Whose prospects to work
+    required: true
+  limit:
+    description: Maximum prospects in one run
+    default: "25"
+
+connectors: {}
+
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 80
+  timeoutSec: 3600
+  idleTimeoutSec: 900
+
+concurrency: 2
+
+nodes:
+  - id: prospects
+    name: Find prospects
+    readonly: true
+    prompt: |
+      Find up to ${{ inputs.limit }} prospects owned by ${{ inputs.owner }} that are
+      due a first touch.
+
+      Check whether each one has already been contacted or already replied. Read
+      only. Change nothing.
+
+      Split the results in `data` into `needs_outreach` and `already_handled`. For
+      the second group include the evidence, because a human decides what to do
+      about those rather than an agent.
+    outputs:
+      - name: prospects
+        kind: records
+        description: Prospects due a touch, plus ones already handled
+
+  - id: research
+    name: Research them
+    needs: [prospects]
+    readonly: true
+    prompt: |
+      For each prospect in `needs_outreach`, find the right person and whatever
+      context would make an email specific rather than generic.
+
+      Where you find nothing worth saying, say so. A prospect with thin research is
+      better dropped than emailed with filler, and the drafting node will handle an
+      honest gap correctly.
+    outputs:
+      - name: research
+        kind: records
+        description: Contact plus the context worth referencing, per prospect
+
+  - id: sequence
+    name: Draft the outreach
+    needs: [research]
+    readonly: true
+    approval:
+      when: after
+      prompt: >
+        Read the actual email copy before any of it sends. Nothing has left the
+        building yet. Approving this pushes it and it goes out.
+    prompt: |
+      Draft the first-touch sequence for each researched prospect.
+
+      Do not create anything in your outreach tool. Do not send anything. Draft only.
+
+      Put the full copy in `data`: per prospect, the recipient, the subject, and the
+      body exactly as it would send. A human is about to read this and decide, so it
+      has to contain the real text, not a description of it.
+
+      Drop any prospect whose research came back thin, and list what you dropped and
+      why. A shorter, specific batch beats a padded one.
+    outputs:
+      - name: sequence
+        kind: changeset
+        description: The exact copy, per prospect, not yet anywhere
+
+  - id: push
+    name: Push the approved sequence
+    needs: [sequence]
+    resources: [outreach:main]
+    prompt: |
+      Push exactly the approved sequence you were handed.
+
+      Send the copy as approved. Do not rewrite it, do not improve it, and do not
+      add prospects that are not in the changeset. If something no longer applies,
+      skip it and report it rather than adapting it yourself.
+    outputs:
+      - name: pushed
+        kind: records
+        description: Who was added where, and what was skipped
+
+  - id: mark
+    name: Record it
+    needs: [push]
+    resources: [crm:main]
+    prompt: |
+      Record the outreach you were handed against the matching CRM records, so the
+      next run does not contact the same people again.
+
+      Only touch records that actually appear in the push results.
+    outputs:
+      - name: marked
+        kind: records
+        description: Records updated to reflect the outreach

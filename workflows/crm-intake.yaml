@@ -1,0 +1,150 @@
+# Inbound intake through to your CRM.
+#
+# This is the shape to copy when a pipeline writes to a system of record. It
+# shows the two safety patterns side by side, because they are not
+# interchangeable and choosing wrongly is the main way these pipelines go bad:
+#
+#   create_records  uses an `after` gate. The writes already happened when the
+#                   gate fires; what it stops is everything downstream
+#                   compounding them before a human has looked. Use this when
+#                   the work genuinely cannot be computed before it is done.
+#
+#   propose/apply   uses a changeset. Nothing is written until a human approves,
+#                   because a field update can be worked out in full first.
+#                   Prefer this shape wherever the work splits that way. It is
+#                   the closest thing this kind of work has to a diff.
+
+name: crm-intake
+description: Inbound submissions through to CRM records, stages and contacts.
+
+inputs:
+  batch_date:
+    description: The batch being processed, e.g. 2026-09-24
+    required: true
+
+# Point these at MCP servers you have already configured. A node only receives
+# the connectors it names, so a node with no business touching your mailbox
+# cannot reach it.
+connectors: {}
+
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 80
+  timeoutSec: 3600
+  idleTimeoutSec: 900
+
+concurrency: 2
+
+nodes:
+  - id: intake
+    name: Collect this batch
+    skill: your-intake-skill
+    resources: [spreadsheet:intake]
+    prompt: |
+      Collect the inbound submissions for ${{ inputs.batch_date }} and record them.
+
+      In your manifest, put what you collected into `data` as an array of objects
+      with at least a name, a website and the original subject line verbatim. The
+      next node matches on these, so do not normalise or tidy the names.
+    outputs:
+      - name: submissions
+        kind: records
+        description: Everything collected in this batch, in arrival order
+
+  - id: create_records
+    name: Create CRM records
+    skill: your-crm-skill
+    needs: [intake]
+    resources: [crm:main]
+    approval:
+      when: after
+      prompt: >
+        New CRM records were created from this batch. Check them before the rest
+        of the chain builds on top of them.
+    prompt: |
+      Create the CRM records for the submissions you were handed.
+
+      Stay in scope: record creation and owner assignment only. Stage changes,
+      cross-references and contact sourcing are separate nodes in this chain.
+
+      Read the live field names before writing rather than assuming them. Schemas
+      drift, and a write against a remembered field name fails in the least
+      useful way possible.
+
+      List every record you created or updated with its id and the submission it
+      came from. Downstream nodes address records by these ids.
+    outputs:
+      - name: records
+        kind: records
+        description: Record ids created or updated, keyed back to submissions
+
+  - id: propose_stages
+    name: Work out the stage changes
+    needs: [create_records]
+    readonly: true
+    prompt: |
+      Work out which records need a stage change, based on this batch.
+
+      Do not write anything. Produce the proposed changes only.
+
+      For each one put, in `data`: the record id, the name, the current value, the
+      proposed value, and one line saying why. A human reads this and decides, so
+      it has to stand on its own without re-deriving your work.
+    outputs:
+      - name: stage_changes
+        kind: changeset
+        description: Proposed stage changes, not yet applied
+
+  - id: apply_stages
+    name: Apply the approved stage changes
+    needs: [propose_stages]
+    resources: [crm:main]
+    approval:
+      when: before
+      prompt: >
+        Apply the proposed stage changes. Read the changeset above first. Nothing
+        has been written yet.
+    prompt: |
+      Apply exactly the changes in the approved changeset you were handed. Nothing
+      else.
+
+      Do not re-derive them, do not extend them, and do not fix anything else you
+      notice along the way. If a record moved since the changeset was written so
+      the change no longer makes sense, skip it and say which and why.
+    outputs:
+      - name: applied
+        kind: records
+        description: What was applied, and what was skipped and why
+
+  - id: contacts
+    name: Source contacts
+    skill: your-contact-skill
+    needs: [create_records]
+    readonly: true
+    prompt: |
+      Source contacts for the records you were handed.
+
+      Report which you found and which you could not, with the reason. A record
+      with no contact found is a normal outcome, and reporting it honestly is far
+      more useful than filling it with a guess.
+    outputs:
+      - name: contacts
+        kind: records
+        description: Contacts found per record, and the misses
+
+  - id: summary
+    name: Batch summary
+    needs: [apply_stages, contacts]
+    readonly: true
+    prompt: |
+      Write a short operator summary of this batch for ${{ inputs.batch_date }}
+      using everything you were handed.
+
+      Cover what came in, what was created, which stage changes were applied and
+      which were skipped, and which records still have no contact.
+
+      Lead with anything that needs a human. Save it to outputs/report/summary.md.
+    outputs:
+      - name: report
+        kind: document
+        description: Operator summary of the batch

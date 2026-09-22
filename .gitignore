@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.skillflow/
+*.log
+.DS_Store
+
+# Your real workflows: company specifics, not for the public repo.
+private-workflows/

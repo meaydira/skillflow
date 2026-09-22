@@ -1,0 +1,53 @@
+name: hello-chain
+description: >
+  A three node chain that touches nothing external. Use it to check your install
+  and to see what a handoff actually looks like on disk.
+
+inputs:
+  topic:
+    description: What the chain should research and write about
+    required: true
+
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 20
+  idleTimeoutSec: 180
+
+concurrency: 2
+
+nodes:
+  - id: gather
+    name: Gather facts
+    prompt: |
+      Write down five short, concrete facts about: ${{ inputs.topic }}
+
+      Use only what you already know. Do not search the web, do not read files.
+      Keep each fact to one sentence.
+    outputs:
+      - name: facts
+        kind: records
+        description: The five facts, as structured data
+
+  - id: angle
+    name: Pick an angle
+    needs: [gather]
+    prompt: |
+      Read the facts you were handed. Choose the single most interesting angle on
+      ${{ inputs.topic }} and say why in two sentences.
+    outputs:
+      - name: angle
+        kind: note
+        description: The chosen angle and the reasoning
+
+  - id: write
+    name: Write it up
+    needs: [gather, angle]
+    prompt: |
+      Using the facts and the chosen angle you were handed, write a short brief
+      (under 200 words) about ${{ inputs.topic }}.
+
+      Save it to outputs/brief/brief.md and list that file in your manifest.
+    outputs:
+      - name: brief
+        kind: document
+        description: The finished brief as a markdown file

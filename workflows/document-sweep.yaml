@@ -1,0 +1,108 @@
+# Find documents, download them, file them, and report.
+#
+# This one is mostly document handoff rather than record writes, which is the
+# third shape the artifact model has to cover. It is also the gentlest pipeline
+# to test against live systems first, because most of it only moves files.
+
+name: document-sweep
+description: Collect the period's documents, file them, and send the summary.
+
+inputs:
+  period:
+    description: The period being swept, e.g. 2026-09-21
+    required: true
+  recipient:
+    description: Who the summary goes to
+    required: true
+
+connectors: {}
+
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 60
+  timeoutSec: 3600
+  idleTimeoutSec: 900
+
+concurrency: 3
+
+nodes:
+  - id: find
+    name: Find the documents
+    readonly: true
+    prompt: |
+      Find the documents that arrived for ${{ inputs.period }}.
+
+      Read only: nothing is downloaded or filed yet.
+
+      In `data`, list each one with its source, its link, and its type. The
+      downloader branches on the type.
+    outputs:
+      - name: document_list
+        kind: records
+        description: Everything found, with links and types
+
+  - id: download
+    name: Download them
+    needs: [find]
+    prompt: |
+      Download each document you were handed into outputs/documents/.
+
+      Where one fails, keep going and record the failure. A partial sweep that
+      names its gaps is useful; one that silently drops three documents is not.
+
+      List every downloaded file in your manifest.
+    outputs:
+      - name: documents
+        kind: document
+        description: The downloaded files
+      - name: download_report
+        kind: records
+        description: What downloaded, what failed, and why
+
+  - id: file
+    name: File them
+    needs: [download]
+    resources: [archive:main]
+    prompt: |
+      File the documents you were handed following your naming convention.
+
+      Report what you filed and where, so the summary can point at it.
+    outputs:
+      - name: filed
+        kind: records
+        description: Where each document ended up
+
+  - id: summary
+    name: Sweep summary
+    needs: [file, download]
+    readonly: true
+    approval:
+      when: after
+      prompt: Read the summary before it goes out. Approving sends it.
+    prompt: |
+      Write the sweep summary for ${{ inputs.period }}.
+
+      Cover what came in, what was filed and where, and anything that failed.
+
+      Send this every period even when it was quiet. A summary saying "three
+      documents, all filed, nothing failed" is the point, because its absence is
+      what tells you the sweep did not run.
+
+      Save it to outputs/summary/email.md. Do not send it. The next node sends it
+      once a human has read it.
+    outputs:
+      - name: summary_email
+        kind: document
+        description: The summary, drafted and not yet sent
+
+  - id: send
+    name: Send the summary
+    needs: [summary]
+    prompt: |
+      Send the approved summary you were handed to ${{ inputs.recipient }}.
+
+      Send it exactly as approved, without rewriting it.
+    outputs:
+      - name: sent
+        kind: records
+        description: Confirmation of what was sent
