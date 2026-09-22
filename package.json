@@ -44,5 +44,14 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "author": "Dilara Bozyilan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meaydira/skillflow.git"
+  },
+  "homepage": "https://github.com/meaydira/skillflow#readme",
+  "bugs": {
+    "url": "https://github.com/meaydira/skillflow/issues"
   }
 }

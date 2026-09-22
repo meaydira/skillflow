@@ -63,7 +63,10 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
     maxTurns: node.maxTurns ?? defaults.maxTurns ?? 60,
     // 'user' picks up the skills already installed in ~/.claude/skills, which is
     // the whole point: your existing skill library is the node library.
-    settingSources: ['user'],
+    // 'user' and 'project' are what make already-installed skills and agents
+    // resolvable by name, which is the whole point of naming them in a workflow.
+    settingSources: ['user', 'project'],
+    ...(node.agent ? { agent: node.agent } : {}),
     skills: node.skill ? [node.skill] : 'all',
     allowedTools: node.allowedTools ?? defaults.allowedTools,
     disallowedTools: [

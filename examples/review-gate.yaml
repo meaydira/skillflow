@@ -1,0 +1,69 @@
+# The pattern worth copying: propose, review, then apply.
+#
+# The first node works out what should change and writes it down. It is
+# `readonly`, so it cannot act on its own conclusions. A human reads the actual
+# proposed values and decides. Only then does a second node apply them, and its
+# only instruction is to apply what was approved and nothing else.
+#
+# This is what makes an unattended agent safe to point at a system of record.
+# Self-contained: it invents nothing external and writes only inside the run.
+
+name: review-gate
+description: Propose changes, hold them for a human, then apply exactly what was approved.
+
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 15
+  idleTimeoutSec: 300
+
+nodes:
+  - id: propose
+    name: Propose corrections
+    readonly: true
+    prompt: |
+      Here are six contact records from a CRM export. Some fields are clearly wrong
+      or inconsistent; some are fine.
+
+      1. id=C-101  name="jane doe"          company="Acme Corp."   email="jane@acme.com"     country="usa"
+      2. id=C-102  name="Bob Smith"         company="acme corp"    email="bob@acme.com"      country="United States"
+      3. id=C-103  name="Wei Zhang"         company="Nordwind GmbH" email="wei@nordwind.de"  country="Germany"
+      4. id=C-104  name="MARIA GARCIA"      company="Nordwind Gmbh" email="maria@nordwind"   country="germany"
+      5. id=C-105  name="Priya Patel"       company="Lumen Labs"   email="priya@lumenlabs.io" country="India"
+      6. id=C-106  name="j. o'connor"       company="Lumen  Labs"  email=""                  country="Ireland"
+
+      Work out which fields should change and what they should become. Do not
+      invent data: if a field is missing and cannot be derived from what is here,
+      propose nothing for it and say so.
+
+      Do not apply anything. You are writing a proposal.
+
+      In `data`, give an array of changes, each with: id, field, current, proposed,
+      and a short reason. Leave correct fields alone; a clean record is a valid
+      outcome and padding the list with cosmetic edits makes the review worse.
+    outputs:
+      - name: corrections
+        kind: changeset
+        description: Proposed field corrections, not yet applied
+
+  - id: apply
+    name: Apply the approved corrections
+    needs: [propose]
+    approval:
+      when: before
+      prompt: >
+        Apply these corrections. Read each proposed value. Nothing has been
+        written yet, and rejecting stops the run.
+    prompt: |
+      Apply exactly the corrections in the approved changeset you were handed.
+
+      Here, "apply" means write the corrected records to
+      outputs/applied/records.json. In a real workflow this node would write to
+      the system of record instead, and the instruction would be the same: apply
+      what was approved, nothing more.
+
+      Do not re-derive the corrections and do not add any you think were missed.
+      Report the count you applied.
+    outputs:
+      - name: applied
+        kind: records
+        description: The corrected records, and how many changes were applied

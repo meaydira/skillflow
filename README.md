@@ -34,30 +34,96 @@ Diamond nodes are human gates. Everything else runs unattended.
 ## Install
 
 ```bash
-npm install -g skillflow
+git clone https://github.com/meaydira/skillflow && cd skillflow
+npm install && npm run build && npm link
 ```
 
-You also need Claude Code authenticated for headless use, because skillflow
-spawns it:
+`npm link` puts `skillflow` on your PATH. Skip it and use `npx tsx src/cli.ts`
+in place of `skillflow` everywhere below.
+
+You also need Claude Code authenticated, because skillflow spawns it:
 
 ```bash
-npm install -g @anthropic-ai/claude-code && claude login
+npm install -g @anthropic-ai/claude-code
+claude auth login
 ```
 
-An `ANTHROPIC_API_KEY` in the environment works too. Note that skillflow cannot
-borrow the credentials of a Claude desktop session, so run it from a terminal or
-from cron rather than from inside another agent.
+An `ANTHROPIC_API_KEY` in the environment works instead. Note that skillflow
+cannot borrow the credentials of a Claude desktop session, so run it from a
+terminal or from cron rather than from inside another agent.
 
 ## Try it
 
 ```bash
-git clone https://github.com/meaydira/skillflow && cd skillflow
 skillflow run examples/hello-chain.yaml -i topic="the Dutch tulip mania"
+skillflow ui
 ```
 
-Three nodes, nothing external touched. Afterwards, look at
+Three nodes, nothing external touched. Then open the UI, or look at
 `.skillflow/runs/<id>/nodes/write/` to see what the last node was actually
 handed. That directory is the whole idea.
+
+For the pattern that matters, run the gated one:
+
+```bash
+skillflow run examples/review-gate.yaml
+```
+
+It proposes changes to six records, then stops and waits for you.
+
+## The UI
+
+```bash
+skillflow ui        # http://127.0.0.1:4600
+```
+
+A local page over the run directory. It shows every run, what each node produced,
+what it cost, and anything waiting on you. Approve and reject are buttons.
+
+![Reviewing a changeset before it is applied](docs/ui-approval.png)
+
+Above: a run held at a gate. The agent proposed nine corrections, flagged one as
+an inference that could misroute mail, and left two clean records alone. Nothing
+has been written. Approving lets the next node apply exactly this and nothing
+else.
+
+![A completed run with its artifacts](docs/ui-run.png)
+
+Above: a finished run. Each node shows its cost, turns, and the summary it wrote
+for the node after it.
+
+It binds to loopback and has no login, because it is a window onto files you
+already own on a machine you are already sitting at. A run is linkable at
+`#<run-id>` if you want to point someone at one.
+
+## Using skills and agents you already have
+
+```bash
+skillflow list            # everything installed on this machine
+skillflow list skills --search deck
+skillflow list agents
+```
+
+Put the name it prints on a node:
+
+```yaml
+- id: research
+  skill: docsend-downloader     # a skill from ~/.claude/skills or a plugin
+- id: review
+  agent: code-reviewer          # a subagent from ~/.claude/agents or a plugin
+```
+
+A node can use either, or neither. With neither, the prompt is the whole
+instruction, which is often enough.
+
+To start a new workflow:
+
+```bash
+skillflow new workflows/my-thing.yaml -n fetch check publish
+```
+
+That writes a commented skeleton with those three nodes wired in order, ready to
+edit.
 
 ## The handoff
 
@@ -189,6 +255,9 @@ and re-running it from the top is the worst thing the tool could do.
 | `skillflow graph <file>` | print it as a mermaid diagram |
 | `skillflow logs <id> [node]` | replay the ledger. `--tools` includes tool calls |
 | `skillflow artifacts <id>` | list what a run produced |
+| `skillflow ui` | local web view with approve and reject buttons |
+| `skillflow list [skills\|agents]` | what is installed and usable as a node |
+| `skillflow new <file>` | scaffold a workflow to edit |
 
 ## Workflow reference
 
@@ -218,7 +287,8 @@ concurrency: 3
 nodes:
   - id: example        # required, unique
     name: Human name
-    skill: my-skill    # a skill from ~/.claude/skills
+    skill: my-skill    # a skill from ~/.claude/skills or a plugin
+    agent: my-agent    # or run the node as one of your subagents
     needs: [other]     # upstream nodes; their artifacts are handed over
     readonly: true     # documents that this node cannot change anything
     resources: []      # logical locks
@@ -295,7 +365,8 @@ Two things it does not do yet, both deliberate:
   you have already configured. Remote servers behind interactive OAuth are the
   genuine hard part of running agents unattended, and pretending otherwise would
   be worse than saying so.
-- **No web UI.** The run directory is the interface.
+- **No multi-machine support.** Everything runs on the machine you start it on.
+  The locks are local files, so two laptops will not see each other's.
 
 ## Prior art
 

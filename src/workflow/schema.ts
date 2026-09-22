@@ -30,6 +30,7 @@ const nodeSpec = z.object({
     .regex(/^[a-z0-9][a-z0-9_-]*$/i, 'node id must be alphanumeric with - or _'),
   name: z.string().optional(),
   skill: z.string().optional(),
+  agent: z.string().optional(),
   prompt: z.string().min(1),
   needs: z.array(z.string()).default([]),
   outputs: z.array(outputSpec).default([]),

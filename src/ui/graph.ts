@@ -4,7 +4,7 @@ import type { LoadedWorkflow } from '../workflow/load.js';
 export function toMermaid(wf: LoadedWorkflow): string {
   const lines = ['graph TD'];
   for (const node of wf.spec.nodes) {
-    const label = [node.name ?? node.id, node.skill ? `[${node.skill}]` : '']
+    const label = [node.name ?? node.id, node.skill ? `[${node.skill}]` : node.agent ? `<${node.agent}>` : '']
       .filter(Boolean)
       .join('<br/>');
     const shape = node.approval ? `{{"${label}"}}` : `["${label}"]`;
@@ -33,6 +33,7 @@ export function toOutline(wf: LoadedWorkflow): string {
       if (!node) continue;
       const bits = [
         node.skill ? `skill: ${node.skill}` : null,
+        node.agent ? `agent: ${node.agent}` : null,
         node.resources.length > 0 ? `locks: ${node.resources.join(', ')}` : null,
         node.readonly ? 'read-only' : null,
         node.approval ? `gate: ${node.approval.when ?? 'after'}` : null,

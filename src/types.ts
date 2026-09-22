@@ -77,6 +77,12 @@ export interface NodeSpec {
   name?: string;
   /** Skill to invoke, e.g. "crm-sync". Optional: a node can be pure prompt. */
   skill?: string;
+  /**
+   * A Claude Code subagent to run this node as, by name, from ~/.claude/agents
+   * or a plugin. Its system prompt, tool restrictions and model apply to the
+   * whole node. `skillflow list` prints the names available on this machine.
+   */
+  agent?: string;
   /** The instruction. Supports ${{ }} templating. */
   prompt: string;
   /** Upstream node ids. Their artifacts are handed to this node automatically. */

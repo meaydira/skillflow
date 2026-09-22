@@ -10,6 +10,8 @@ import { Ledger } from './engine/ledger.js';
 import { toMermaid, toOutline } from './ui/graph.js';
 import { describeRun, listRuns } from './ui/status.js';
 import { runRoot } from './engine/paths.js';
+import { findAgents, findSkills } from './discover.js';
+import { writeFileSync } from 'node:fs';
 
 const program = new Command();
 const BASE = process.env.SKILLFLOW_HOME ?? process.cwd();
@@ -262,6 +264,117 @@ program
       }
     }
     process.stdout.write('\n');
+  });
+
+program
+  .command('ui')
+  .description('open a local web view of your runs, with approve and reject buttons')
+  .option('-p, --port <n>', 'port to listen on', '4600')
+  .action(async (opts: { port: string }) => {
+    const { startUi } = await import('./ui/server.js');
+    try {
+      const url = await startUi(BASE, Number(opts.port));
+      process.stdout.write(`\nskillflow ui  ${url}\n`);
+      process.stdout.write(`reading ${BASE}/.skillflow/runs\n\nCtrl-C to stop.\n\n`);
+    } catch (err) {
+      fail(new Error(`could not start the ui: ${(err as Error).message}`));
+    }
+  });
+
+program
+  .command('list [what]')
+  .description('list the skills and agents installed on this machine, for use as nodes')
+  .option('-s, --search <text>', 'filter by name or description')
+  .action((what: string | undefined, opts: { search?: string }) => {
+    const wanted = (what ?? 'all').toLowerCase();
+    const match = (text: string): boolean =>
+      !opts.search || text.toLowerCase().includes(opts.search.toLowerCase());
+
+    const render = (title: string, items: ReturnType<typeof findSkills>, key: string) => {
+      const filtered = items.filter((i) => match(`${i.name} ${i.description} ${i.source}`));
+      process.stdout.write(`\n${title} (${filtered.length})\n\n`);
+      if (filtered.length === 0) {
+        process.stdout.write('  none found\n');
+        return;
+      }
+      for (const item of filtered) {
+        const summary = item.description.replace(/\s+/g, ' ').slice(0, 96);
+        process.stdout.write(`  ${item.name}\n`);
+        process.stdout.write(`    ${key}: ${item.name}    source: ${item.source}\n`);
+        if (summary) process.stdout.write(`    ${summary}${item.description.length > 96 ? '...' : ''}\n`);
+        process.stdout.write('\n');
+      }
+    };
+
+    if (wanted === 'all' || wanted === 'skills') render('Skills', findSkills(), 'skill');
+    if (wanted === 'all' || wanted === 'agents') render('Agents', findAgents(), 'agent');
+    process.stdout.write('Put the name on a node as `skill: <name>` or `agent: <name>`.\n\n');
+  });
+
+program
+  .command('new <file>')
+  .description('scaffold a workflow file you can edit')
+  .option('-n, --node <name...>', 'node ids to create, in order', [])
+  .action((file: string, opts: { node: string[] }) => {
+    const ids = opts.node.length > 0 ? opts.node : ['gather', 'decide', 'deliver'];
+    const name = file.replace(/.*\//, '').replace(/\.ya?ml$/, '');
+
+    const nodes = ids.map((id, index) => {
+      const needs = index === 0 ? '' : `    needs: [${ids[index - 1]}]\n`;
+      return [
+        `  - id: ${id}`,
+        `    name: ${id.charAt(0).toUpperCase()}${id.slice(1)}`,
+        `    # skill: your-skill        # run \`skillflow list skills\` to see what you have`,
+        `    # agent: your-agent        # or run the node as one of your agents`,
+        `    # readonly: true           # say so when the node cannot change anything`,
+        `    # resources: [crm:main]    # logical lock: nothing else touches this at the same time`,
+        needs.trimEnd(),
+        `    prompt: |`,
+        `      What ${id} should do.`,
+        ``,
+        `      Say plainly what you want back, and what should happen if it cannot be done.`,
+        `    outputs:`,
+        `      - name: result`,
+        `        kind: note              # document | records | note | ref | changeset`,
+        `        description: what this node hands to the next one`,
+      ]
+        .filter((line) => line !== '')
+        .join('\n');
+    });
+
+    const body = [
+      `name: ${name}`,
+      `description: what this workflow is for`,
+      ``,
+      `inputs:`,
+      `  example:`,
+      `    description: something the run needs, referenced as \${{ inputs.example }}`,
+      `    required: true`,
+      ``,
+      `# MCP servers nodes can opt into with \`connectors: [name]\``,
+      `connectors: {}`,
+      ``,
+      `defaults:`,
+      `  permissionMode: acceptEdits`,
+      `  maxTurns: 30`,
+      `  idleTimeoutSec: 600`,
+      ``,
+      `concurrency: 2`,
+      ``,
+      `nodes:`,
+      ...nodes,
+      ``,
+      `# Add a human gate to any node that does something you cannot undo:`,
+      `#`,
+      `#   approval:`,
+      `#     when: before     # hold the node until you approve`,
+      `#     when: after      # let it run, hold its outputs`,
+      `#     prompt: what you are being asked to check`,
+      ``,
+    ].join('\n');
+
+    writeFileSync(file, body, 'utf8');
+    process.stdout.write(`\nwrote ${file}\n\n  skillflow validate ${file}\n  skillflow run ${file} -i example=value --dry-run\n\n`);
   });
 
 program.parseAsync(process.argv).catch(fail);
