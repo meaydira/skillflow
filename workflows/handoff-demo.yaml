@@ -1,0 +1,27 @@
+name: handoff-demo
+description: Two agents, one hands its work to the other
+connectors: {}
+defaults:
+  permissionMode: acceptEdits
+  maxTurns: 40
+  idleTimeoutSec: 900
+concurrency: 2
+nodes:
+  - id: pick_three_companies
+    name: Pick three companies
+    agent: code-explorer
+    prompt: "Invent three fictional B2B software companies. For each give a name, a one-line description, and a made-up employee count. Put them in data as an array. Self-contained: do not read files or search the web."
+    outputs:
+      - name: result
+        kind: note
+        description: What this step hands to the next one
+  - id: rank_them
+    name: Rank them
+    agent: code-explorer
+    needs:
+      - pick_three_companies
+    prompt: You were handed three companies by the previous step. Read HANDOFF.md and the staged inputs, then rank them from most to least interesting to a B2B software investor, with one sentence of reasoning each. Name all three explicitly so it is clear you received them.
+    outputs:
+      - name: result
+        kind: note
+        description: What this step hands to the next one

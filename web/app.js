@@ -34,12 +34,74 @@ const PRIORITIES = ['urgent', 'high', 'medium', 'low', 'none'];
 const initials = (n) => String(n || '?').replace(/[^a-z0-9]/gi, ' ').trim()
   .split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
 
+/* -------------------------------------------------------------------- modal */
+
+/**
+ * Electron does not implement window.prompt(), so anything built on it works in
+ * a browser and silently does nothing in the app. Everything that asks the user
+ * for something goes through here instead.
+ */
+function modal({ title, body, confirmLabel, onConfirm, width }) {
+  return new Promise((resolve) => {
+    const host = document.createElement('div');
+    host.className = 'modal-scrim';
+    host.innerHTML =
+      '<div class="modal"' + (width ? ' style="width:min(' + width + 'px,100%)"' : '') + '>' +
+        '<header><h3>' + esc(title) + '</h3></header>' +
+        '<div class="mbody"></div>' +
+        '<footer><span class="err" id="m-err"></span>' +
+          '<button class="btn" id="m-cancel">Cancel</button>' +
+          '<button class="btn primary" id="m-ok">' + esc(confirmLabel || 'Save') + '</button>' +
+        '</footer>' +
+      '</div>';
+    host.querySelector('.mbody').innerHTML = body;
+    document.body.appendChild(host);
+
+    const close = (value) => { host.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    document.addEventListener('keydown', onKey);
+
+    host.addEventListener('mousedown', (e) => { if (e.target === host) close(null); });
+    host.querySelector('#m-cancel').onclick = () => close(null);
+
+    host.querySelector('#m-ok').onclick = async () => {
+      const ok = host.querySelector('#m-ok');
+      const err = host.querySelector('#m-err');
+      err.textContent = '';
+      ok.disabled = true;
+      try {
+        const value = await onConfirm(host);
+        if (value === undefined) { ok.disabled = false; return; }
+        close(value);
+      } catch (e) {
+        err.textContent = e.message || String(e);
+        ok.disabled = false;
+      }
+    };
+
+    const first = host.querySelector('input, textarea, select');
+    if (first) first.focus();
+  });
+}
+
+function runnerOptions(selected) {
+  const sel = (v) => (v === selected ? ' selected' : '');
+  return '<option value=""' + sel('') + '>No agent (prompt only)</option>' +
+    '<optgroup label="Agents">' + state.agents.map((a) =>
+      '<option value="agent:' + esc(a.name) + '"' + sel('agent:' + a.name) + '>' + esc(a.name) + '</option>').join('') +
+    '</optgroup>' +
+    '<optgroup label="Skills">' + state.skills.map((a) =>
+      '<option value="skill:' + esc(a.name) + '"' + sel('skill:' + a.name) + '>' + esc(a.name) + '</option>').join('') +
+    '</optgroup>';
+}
+
 /* -------------------------------------------------------------------- state */
 let state = { tasks: [], skills: [], agents: [], workflows: [], runs: [] };
 let view = 'board';
 let openTask = null;      // task id whose sheet is open
 let openDetail = null;    // its fetched detail
 let lastBoardKey = '';
+let lastViewKey = '';
 let lastSheetKey = '';
 let dragId = null;
 
@@ -57,12 +119,22 @@ async function refresh() {
 
 function render() {
   const el = $('#view');
-  if (view === 'board') return renderBoard(el);
+  if (view === 'board') { lastViewKey = ''; return renderBoard(el); }
 
   lastBoardKey = '';
   $('#title').textContent = { runs: 'Runs', workflows: 'Workflows', agents: 'Agents', skills: 'Skills' }[view];
   $('#count').textContent = '';
-  $('#new').style.display = view === 'board' ? '' : 'none';
+  $('#new').style.display = 'none';
+
+  // Same rule as the board: re-rendering on every poll destroys the element
+  // under the cursor, so a click that lands between a poll and its re-render
+  // hits a node that no longer exists. Only redraw when the data moved.
+  const data = view === 'runs' ? state.runs
+    : view === 'workflows' ? state.workflows
+    : view === 'agents' ? state.agents : state.skills;
+  const key = view + '|' + JSON.stringify(data);
+  if (key === lastViewKey) return;
+  lastViewKey = key;
 
   if (view === 'runs') return renderRuns(el);
   if (view === 'workflows') return renderWorkflows(el);
@@ -199,13 +271,150 @@ function renderLibrary(el, items, kind) {
 
 function renderWorkflows(el) {
   el.className = 'pad';
-  el.innerHTML = state.workflows.length === 0
-    ? '<div class="empty">No workflow files found in ./workflows or ./examples.</div>'
-    : '<table class="lib">' + state.workflows.map((w) =>
-        '<tr><td class="mono">' + esc(w.name) + '</td>' +
-        '<td class="d">' + esc(w.description || '') + '<br><span class="chip">' +
-        w.nodes + ' nodes</span> <span class="chip mono">' + esc(w.path) + '</span></td></tr>').join('') +
-      '</table>';
+  el.innerHTML =
+    '<div style="display:flex;align-items:center;margin-bottom:14px">' +
+      '<div style="color:var(--muted);font-size:13px">' +
+        'A workflow is a chain of steps. Each step is one agent with one prompt, ' +
+        'and hands what it produced to the next.' +
+      '</div>' +
+      '<div style="flex:1"></div>' +
+      '<button class="btn primary" id="wf-new">New workflow</button>' +
+    '</div>' +
+    (state.workflows.length === 0
+      ? '<div class="empty">No workflows yet. Build one.</div>'
+      : '<table class="lib">' + state.workflows.map((w) =>
+          '<tr><td class="mono">' + esc(w.name) + '</td>' +
+          '<td class="d">' + esc(w.description || '') +
+            '<br><span class="chip">' + w.nodes + ' steps</span> ' +
+            '<span class="chip mono">' + esc(w.path) + '</span></td>' +
+          '<td style="white-space:nowrap;text-align:right">' +
+            '<button class="btn" data-edit="' + esc(w.path) + '">Edit</button> ' +
+            '<button class="btn primary" data-run="' + esc(w.path) + '">Run</button>' +
+          '</td></tr>').join('') + '</table>');
+
+  $('#wf-new').onclick = () => workflowBuilder(null);
+  for (const b of el.querySelectorAll('[data-edit]')) {
+    b.onclick = async () => {
+      const detail = await api('/workflows/detail?path=' + encodeURIComponent(b.dataset.edit));
+      workflowBuilder(detail);
+    };
+  }
+  for (const b of el.querySelectorAll('[data-run]')) {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const res = await api('/workflows/run', 'POST', { path: b.dataset.run });
+        view = 'board';
+        document.querySelectorAll('.nav-item').forEach((n) =>
+          n.classList.toggle('on', n.dataset.view === 'board'));
+        lastBoardKey = '';
+        await refresh();
+        showTask(res.taskId);
+      } catch (err) {
+        alert(err.message);
+        b.disabled = false;
+      }
+    };
+  }
+}
+
+/* -------------------------------------------------------- workflow builder */
+
+/**
+ * Build a chain by adding steps. Each step is a prompt plus the agent that runs
+ * it, and by default follows the one above, which is what someone writing a
+ * chain top to bottom means. It saves to a real workflow file.
+ */
+function workflowBuilder(existing) {
+  let steps = existing && existing.steps.length > 0
+    ? existing.steps.map((s) => ({ ...s }))
+    : [{ name: '', prompt: '', runner: '', approval: null }];
+
+  const stepHtml = (step, i) =>
+    (i > 0 ? '<div class="arrow">passes its result down to</div>' : '') +
+    '<div class="step" data-i="' + i + '">' +
+      '<div class="step-head">' +
+        '<span class="n">' + (i + 1) + '</span>' +
+        '<input type="text" class="s-name" placeholder="Step name, e.g. Create accounts" value="' +
+          esc(step.name || '') + '">' +
+        (steps.length > 1 ? '<button class="rm" title="Remove step">&times;</button>' : '') +
+      '</div>' +
+      '<div class="field"><label>Who runs it</label>' +
+        '<select class="s-runner">' + runnerOptions(step.runner || '') + '</select></div>' +
+      '<div class="field"><label>Prompt <span class="hint">' +
+        (i > 0 ? 'it will already have been handed the previous step\'s result' : 'this step starts the chain') +
+        '</span></label>' +
+        '<textarea class="s-prompt" placeholder="What this step should do, and what it should hand on.">' +
+          esc(step.prompt || '') + '</textarea></div>' +
+      '<label class="toggle"><input type="checkbox" class="s-gate"' +
+        (step.approval ? ' checked' : '') + '> Ask me to approve before the next step runs</label>' +
+    '</div>';
+
+  const render = (host) => {
+    host.querySelector('#wf-steps').innerHTML = steps.map(stepHtml).join('');
+    for (const el of host.querySelectorAll('.step')) {
+      const i = Number(el.dataset.i);
+      const rm = el.querySelector('.rm');
+      if (rm) rm.onclick = () => { collect(host); steps.splice(i, 1); render(host); };
+    }
+  };
+
+  const collect = (host) => {
+    host.querySelectorAll('.step').forEach((el, i) => {
+      steps[i] = {
+        ...steps[i],
+        name: el.querySelector('.s-name').value,
+        runner: el.querySelector('.s-runner').value,
+        prompt: el.querySelector('.s-prompt').value,
+        approval: el.querySelector('.s-gate').checked
+          ? { when: 'after', prompt: 'Check this step before the next one runs.' }
+          : null,
+      };
+    });
+  };
+
+  const body =
+    '<div class="field"><label>Workflow name</label>' +
+      '<input type="text" id="wf-name" placeholder="weekly-intake" value="' +
+        esc(existing ? existing.name : '') + '"></div>' +
+    '<div class="field"><label>What it is for <span class="hint">optional</span></label>' +
+      '<input type="text" id="wf-desc" value="' + esc(existing ? existing.description || '' : '') + '"></div>' +
+    '<div id="wf-steps"></div>' +
+    '<button class="btn" id="wf-add" style="width:100%">Add a step</button>';
+
+  modal({
+    title: existing ? 'Edit workflow' : 'New workflow',
+    body,
+    width: 860,
+    confirmLabel: existing ? 'Save changes' : 'Create workflow',
+    onConfirm: async (host) => {
+      collect(host);
+      const name = host.querySelector('#wf-name').value.trim();
+      if (!name) throw new Error('Give the workflow a name.');
+      if (steps.some((s) => !s.prompt.trim())) throw new Error('Every step needs a prompt.');
+      return api('/workflows', 'POST', {
+        name,
+        description: host.querySelector('#wf-desc').value,
+        steps,
+        path: existing ? existing.path : undefined,
+      });
+    },
+  }).then((saved) => { if (saved) { lastBoardKey = ''; refresh(); } });
+
+  // The modal is in the DOM by now; wire the dynamic parts.
+  const host = document.querySelector('.modal-scrim');
+  render(host);
+  host.querySelector('#wf-add').onclick = () => {
+    collect(host);
+    steps.push({ name: '', prompt: '', runner: '', approval: null });
+    render(host);
+    // After the next paint, or the container has not grown yet and the scroll
+    // lands short of the step that was just added.
+    requestAnimationFrame(() => {
+      const body = host.querySelector('.mbody');
+      body.scrollTop = body.scrollHeight;
+    });
+  };
 }
 
 function renderRuns(el) {
@@ -283,6 +492,32 @@ function drawSheet(d) {
       '<button class="btn danger" data-gate="' + esc(a.runId) + '|' + esc(a.node) + '|rejected">Reject</button>' +
     '</div></div>').join('');
 
+  // The chain, when this task ran one: what each step made and what the next
+  // step was handed. This is the difference between "five agents ran" and
+  // knowing what actually moved between them.
+  const flow = (d.graph || []).length > 1
+    ? '<div class="sec">Steps</div><div class="flow">' + d.graph.map((n, i) =>
+        (i > 0 && n.needs.length > 0
+          ? '<div class="flow-edge">hands ' +
+            (n.received.length > 0
+              ? n.received.map((a) => '<span class="mono">' + esc(a.name) + '</span>').join(', ')
+              : 'nothing yet') +
+            ' to <span class="mono">' + esc(n.id) + '</span></div>'
+          : '') +
+        '<div class="flow-node ' + esc(n.status) + '">' +
+          '<div class="fh"><span class="pri ' +
+            (n.status === 'completed' ? 'low' : n.status === 'failed' ? 'urgent' : 'medium') +
+            '">' + esc(n.status) + '</span>' +
+            '<span class="name">' + esc(n.id) + '</span>' +
+            '<span class="stat">' + (n.turns ? n.turns + ' turns  ' : '') +
+              (n.costUsd ? '$' + n.costUsd.toFixed(2) : '') + '</span></div>' +
+          (n.error ? '<div class="flow-out" style="color:var(--bad)">' + esc(n.error) + '</div>' : '') +
+          n.produced.map((a) =>
+            '<div class="flow-out"><span class="k">' + esc(a.name) + ' [' + esc(a.kind) + ']</span><br>' +
+            esc(a.summary) + '</div>').join('') +
+        '</div>').join('') + '</div>'
+    : '';
+
   const thread = d.comments.length === 0
     ? '<div class="empty">Nothing yet.</div>'
     : d.comments.map((c) =>
@@ -320,6 +555,7 @@ function drawSheet(d) {
         (t.status === 'in_review' ? '<button class="btn" id="done">Accept and finish</button>' : '') +
         '<button class="btn" id="save">Save</button>' +
       '</div>' +
+      flow +
       '<div class="sec">Activity</div>' +
       '<div class="thread">' + thread + '</div>' +
       '<div class="sec">' + (t.status === 'in_review' ? 'Feedback' : 'Comment') + '</div>' +
@@ -410,12 +646,56 @@ function wireSheet(t) {
 
 /* ----------------------------------------------------------------- new task */
 async function newTask(status) {
-  const title = prompt('What needs doing?');
-  if (!title || !title.trim()) return;
-  const task = await api('/tasks', 'POST', { title: title.trim(), status: status || 'backlog' });
+  const body =
+    '<div class="field"><label>What needs doing?</label>' +
+      '<input type="text" id="t-title" placeholder="Create Salesforce accounts from this week\'s intake"></div>' +
+    '<div class="field"><label>Details <span class="hint">what done looks like, and anything the agent needs to know</span></label>' +
+      '<textarea id="t-desc" placeholder="Be specific about what you want back, and what should happen if it cannot be done."></textarea></div>' +
+    '<div class="row2">' +
+      '<div class="field"><label>Assign to</label><select id="t-assignee">' +
+        runnerOptions('') +
+        '<optgroup label="Workflows">' + state.workflows.map((w) =>
+          '<option value="workflow:' + esc(w.path) + '">' + esc(w.name) + ' (' + w.nodes + ' steps)</option>').join('') +
+        '</optgroup>' +
+        '<option value="human:me">Me (no agent)</option>' +
+      '</select></div>' +
+      '<div class="field"><label>Priority</label><select id="t-priority">' +
+        PRIORITIES.map((p) => '<option value="' + p + '"' + (p === 'none' ? ' selected' : '') + '>' + p + '</option>').join('') +
+      '</select></div>' +
+    '</div>' +
+    '<label class="toggle"><input type="checkbox" id="t-run"> Start it straight away</label>';
+
+  const created = await modal({
+    title: 'New task',
+    body,
+    confirmLabel: 'Create',
+    onConfirm: async (host) => {
+      const title = host.querySelector('#t-title').value.trim();
+      if (!title) throw new Error('Give it a title.');
+      const assignee = host.querySelector('#t-assignee').value;
+      const startNow = host.querySelector('#t-run').checked;
+      if (startNow && (!assignee || assignee.startsWith('human:'))) {
+        throw new Error('Pick an agent, a skill or a workflow to start it.');
+      }
+
+      const task = await api('/tasks', 'POST', {
+        title,
+        description: host.querySelector('#t-desc').value,
+        status: startNow ? 'todo' : (status || 'backlog'),
+      });
+      await api('/tasks/' + encodeURIComponent(task.id), 'PATCH', {
+        assignee,
+        priority: host.querySelector('#t-priority').value,
+      });
+      if (startNow) await api('/tasks/' + encodeURIComponent(task.id) + '/run', 'POST', {});
+      return task;
+    },
+  });
+
+  if (!created) return;
   lastBoardKey = '';
   await refresh();
-  showTask(task.id);
+  showTask(created.id);
 }
 
 /* -------------------------------------------------------------------- start */
@@ -425,6 +705,7 @@ for (const item of document.querySelectorAll('.nav-item')) {
     item.classList.add('on');
     view = item.dataset.view;
     lastBoardKey = '';
+    lastViewKey = '';
     render();
   };
 }

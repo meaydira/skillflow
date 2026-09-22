@@ -65,3 +65,16 @@ test('a directory without SKILL.md is not reported as a skill', () => {
   writeFileSync(join(base, '.claude', 'skills', 'notaskill', 'README.md'), 'nope', 'utf8');
   assert.deepEqual(projectOnly(base), []);
 });
+
+test('two skills with the same name collapse to one', () => {
+  // Claude resolves a skill by name, so only one of a duplicated pair can ever
+  // run. Offering both would be a choice the user cannot actually make.
+  const base = projectWithSkill('shared', '---\nname: shared\ndescription: The project copy.\n---\n');
+  const all = findSkills(base);
+  assert.equal(all.filter((s) => s.name === 'shared').length, 1);
+});
+
+test('no name appears twice in a discovery listing', () => {
+  const names = findSkills(mkdtempSync(join(tmpdir(), 'skillflow-disc-'))).map((s) => s.name);
+  assert.equal(new Set(names).size, names.length);
+});

@@ -134,13 +134,29 @@ function agentsUnder(dir: string, source: string): Discovered[] {
   return found;
 }
 
+/**
+ * De-duplicate by NAME, not by source.
+ *
+ * A name is how a workflow refers to a skill, and how Claude resolves one, so
+ * two installs sharing a name are not two choices: only one of them can ever
+ * run. Listing both puts a decision in front of the user that their answer
+ * cannot affect. User and project copies win over plugin ones, matching
+ * resolution order.
+ */
+const SOURCE_RANK: Record<string, number> = { user: 0, project: 1 };
+
 function dedupe(items: Discovered[]): Discovered[] {
-  const seen = new Map<string, Discovered>();
+  const best = new Map<string, Discovered>();
   for (const item of items) {
-    const key = `${item.source}/${item.name}`;
-    if (!seen.has(key)) seen.set(key, item);
+    const current = best.get(item.name);
+    if (!current) {
+      best.set(item.name, item);
+      continue;
+    }
+    const rank = (d: Discovered) => SOURCE_RANK[d.source] ?? 2;
+    if (rank(item) < rank(current)) best.set(item.name, item);
   }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...best.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function findSkills(cwd = process.cwd()): Discovered[] {

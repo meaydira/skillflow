@@ -20,6 +20,7 @@ import {
   saveTask,
 } from '../tasks/store.js';
 import { runTask, sendBack } from '../tasks/runner.js';
+import { AuthoringError, saveWorkflow, workflowToInput } from '../tasks/authoring.js';
 import type { Assignee, Priority, TaskStatus } from '../tasks/types.js';
 import { PRIORITIES, TASK_STATUSES } from '../tasks/types.js';
 import type { Artifact } from '../types.js';
@@ -114,6 +115,67 @@ function taskApprovals(baseDir: string, runIds: string[]) {
   );
 }
 
+/**
+ * What each step of a run produced and what it was handed.
+ *
+ * This is the view that makes a chain legible: not just that five agents ran,
+ * but what the third one actually received from the second.
+ */
+function runGraph(baseDir: string, runId: string) {
+  const state = loadRunState(baseDir, runId);
+  const events = new Ledger(baseDir, runId).read();
+
+  const nodes = new Map<string, {
+    id: string;
+    status: string;
+    costUsd: number;
+    turns: number;
+    produced: Artifact[];
+    error?: string;
+  }>();
+
+  const ensure = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, { id, status: 'running', costUsd: 0, turns: 0, produced: [] });
+    return nodes.get(id)!;
+  };
+
+  for (const event of events) {
+    if (!('node' in event)) continue;
+    const node = ensure(event.node);
+    if (event.type === 'node.completed') {
+      node.status = 'completed';
+      node.costUsd = event.costUsd;
+      node.turns = event.turns;
+    } else if (event.type === 'node.failed') {
+      node.status = 'failed';
+      node.error = event.error;
+    } else if (event.type === 'node.skipped') {
+      node.status = 'skipped';
+    } else if (event.type === 'node.artifact') {
+      node.produced.push(event.artifact);
+    }
+  }
+
+  // Resolve the edges from the workflow file when it is still readable, so the
+  // UI can say "this step received X from Y" rather than just listing outputs.
+  let needs: Record<string, string[]> = {};
+  try {
+    if (state?.workflowPath && !state.workflowPath.startsWith('task:')) {
+      const wf = loadWorkflow(state.workflowPath);
+      needs = Object.fromEntries(wf.spec.nodes.map((n) => [n.id, n.needs]));
+    }
+  } catch {
+    // The file moved or stopped parsing since the run. The outputs still tell
+    // the story; only the arrows are missing.
+  }
+
+  return [...nodes.values()].map((node) => ({
+    ...node,
+    needs: needs[node.id] ?? [],
+    received: (needs[node.id] ?? []).flatMap((dep) => nodes.get(dep)?.produced ?? []),
+  }));
+}
+
 function runArtifacts(baseDir: string, runId: string): Artifact[] {
   return new Ledger(baseDir, runId)
     .read()
@@ -192,6 +254,9 @@ export function startUi(baseDir: string, port: number): Promise<string> {
           comments: listComments(baseDir, id),
           approvals: taskApprovals(baseDir, task.runs),
           artifacts: task.runs.flatMap((runId) => runArtifacts(baseDir, runId)),
+          graph: task.runs.length > 0
+            ? runGraph(baseDir, task.runs[task.runs.length - 1])
+            : [],
         });
         return;
       }
@@ -260,6 +325,62 @@ export function startUi(baseDir: string, port: number): Promise<string> {
           .catch(() => json(res, 400, { error: 'bad request body' }));
         return;
       }
+    }
+
+    /* -------------------------------------------------------- workflows */
+    if (path === '/api/workflows' && req.method === 'POST') {
+      readBody(req)
+        .then((body) => {
+          try {
+            const saved = saveWorkflow(
+              baseDir,
+              body as never,
+              typeof body.path === 'string' ? body.path : undefined,
+            );
+            json(res, 200, { ok: true, path: saved });
+          } catch (err) {
+            json(res, err instanceof AuthoringError ? 400 : 500, { error: (err as Error).message });
+          }
+        })
+        .catch(() => json(res, 400, { error: 'bad request body' }));
+      return;
+    }
+
+    if (path === '/api/workflows/detail' && req.method === 'GET') {
+      const relative = url.searchParams.get('path') ?? '';
+      try {
+        json(res, 200, workflowToInput(baseDir, relative));
+      } catch (err) {
+        json(res, 404, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // Running a workflow creates a task for it, so a chain shows up on the board
+    // as one card with one conversation instead of somewhere separate.
+    if (path === '/api/workflows/run' && req.method === 'POST') {
+      readBody(req)
+        .then((body) => {
+          const relative = String(body.path ?? '');
+          if (!relative) return json(res, 400, { error: 'which workflow?' });
+          let title = String(body.title ?? '').trim();
+          try {
+            const wf = loadWorkflow(join(baseDir, relative));
+            if (!title) title = wf.spec.name;
+          } catch (err) {
+            return json(res, 400, { error: (err as Error).message });
+          }
+          const task = createTask(baseDir, {
+            title,
+            description: String(body.description ?? ''),
+            status: 'todo',
+            assignee: { kind: 'workflow', name: relative },
+          });
+          runTask(baseDir, task.id, userInfo().username);
+          json(res, 200, { ok: true, taskId: task.id });
+        })
+        .catch(() => json(res, 400, { error: 'bad request body' }));
+      return;
     }
 
     /* ------------------------------------------------------------- runs */
