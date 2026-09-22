@@ -57,6 +57,17 @@ export function loadWorkflow(file: string): LoadedWorkflow {
     }
   }
 
+  return buildWorkflow(spec, path);
+}
+
+/**
+ * Validate the relationships in an already-parsed spec and derive its execution
+ * order. Split out from `loadWorkflow` so a workflow can also be constructed in
+ * memory, which is how a task assigned to a single agent runs on the same engine
+ * as everything else rather than down a second code path.
+ */
+export function buildWorkflow(spec: ParsedWorkflow, path: string): LoadedWorkflow {
+  const byId = new Map(spec.nodes.map((n) => [n.id, n]));
   const { order, waves } = topoSort(spec);
   return { spec, path, order, waves, byId };
 }

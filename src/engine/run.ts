@@ -18,6 +18,7 @@ export interface RunOptions {
   resume?: boolean;
   dryRun?: boolean;
   onLog?: (line: string) => void;
+  onActivity?: (event: { kind: 'text' | 'tool'; text: string; node: string }) => void;
 }
 
 export interface RunSummary {
@@ -262,6 +263,7 @@ export async function executeRun(options: RunOptions): Promise<RunSummary> {
         runInputs: resolvedInputs,
         ledger,
         onEvent: (line) => log(`      ${line}`),
+        onActivity: options.onActivity,
       })
         .then((result) => {
           results.push(result);

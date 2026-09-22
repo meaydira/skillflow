@@ -10,6 +10,7 @@
   "main": "./dist/index.js",
   "files": [
     "dist",
+    "web",
     "workflows",
     "examples",
     "README.md",
@@ -20,7 +21,8 @@
     "dev": "tsx src/cli.ts",
     "prepublishOnly": "npm run build",
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "board": "tsx src/cli.ts ui"
   },
   "keywords": [
     "claude",

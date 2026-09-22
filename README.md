@@ -1,35 +1,30 @@
 # skillflow
 
-Run your Claude skills as a dependency graph, with real handoffs between them.
+A board for your Claude agents. Assign a task, watch an agent pick it up, give
+feedback, decide when it is done. Chain agents into workflows when the steps are
+known in advance.
 
-If you have built up a library of Claude skills, you have probably noticed that
-half of them quietly depend on each other. The descriptions say things like
-"typically runs after X". You run them one at a time, in the right order, from
-memory, and you copy the output of one into the prompt of the next.
+![The board](docs/board.png)
 
-skillflow turns that prose into a file. Each node is one headless Claude run.
-Each edge carries a typed artifact. A human can be put in the middle of the chain
-where the work stops being reversible.
+Two units of work, because work arrives in two shapes:
 
-```mermaid
-graph TD
-  intake["Collect this batch<br/>[your-intake-skill]"]
-  create_records{{"Create CRM records<br/>[your-crm-skill]"}}
-  propose_stages["Work out the stage changes"]
-  apply_stages{{"Apply the approved stage changes"}}
-  contacts["Source contacts<br/>[your-contact-skill]"]
-  summary["Batch summary"]
-  intake -->|submissions| create_records
-  create_records -->|records| propose_stages
-  propose_stages -->|stage_changes| apply_stages
-  create_records -->|records| contacts
-  apply_stages -->|applied| summary
-  contacts -->|contacts| summary
-  classDef gate fill:#fff3cd,stroke:#b8860b;
-  class create_records,apply_stages gate;
-```
+- **A task** is a thing you want done. You assign it to one of your agents or
+  skills, it works, and it comes back to In Review. You read what it did and
+  either accept it or send it back with feedback, and it tries again knowing
+  what you said.
+- **A workflow** is a chain you already know the shape of. Agent one creates the
+  accounts, agent two matches the interactions, agent three sources the
+  contacts. Each step hands typed artifacts to the next.
 
-Diamond nodes are human gates. Everything else runs unattended.
+A task can be assigned to a workflow, so a five step chain sits on the board as
+one card.
+
+Anything that cannot be undone can be held for a human. The agent works out what
+it wants to change and writes it down, you read the actual proposed values, and
+only then does the next step apply exactly what you approved.
+
+Everything lives in files under `.skillflow/`. No database, no account, nothing
+leaves your machine except the model calls.
 
 ## Install
 
@@ -55,11 +50,19 @@ terminal or from cron rather than from inside another agent.
 ## Try it
 
 ```bash
-skillflow run examples/hello-chain.yaml -i topic="the Dutch tulip mania"
 skillflow ui
 ```
 
-Three nodes, nothing external touched. Then open the UI, or look at
+Open http://127.0.0.1:4600, click **New task**, describe something small,
+assign it to one of your agents, and press Run.
+
+Or run a workflow from the terminal:
+
+```bash
+skillflow run examples/hello-chain.yaml -i topic="the Dutch tulip mania"
+```
+
+Three nodes, nothing external touched. Then look at
 `.skillflow/runs/<id>/nodes/write/` to see what the last node was actually
 handed. That directory is the whole idea.
 
@@ -71,30 +74,39 @@ skillflow run examples/review-gate.yaml
 
 It proposes changes to six records, then stops and waits for you.
 
-## The UI
+## The board
 
 ```bash
 skillflow ui        # http://127.0.0.1:4600
 ```
 
-A local page over the run directory. It shows every run, what each node produced,
-what it cost, and anything waiting on you. Approve and reject are buttons.
+Drag cards between columns to change status. Click one to open it.
+
+![A task, its agent, and the conversation on it](docs/task.png)
+
+Inside a task you set the assignee, priority and resource locks, edit the
+description, and read everything that has happened on it. **Run with agent**
+starts the work. The agent posts as it goes and moves the card to In Review when
+it is finished.
+
+From there you either **Accept and finish**, or write what is wrong and **Send
+back with feedback**. Sending back re-runs the agent with your feedback and its
+own previous answer in context, so the second attempt is a revision rather than a
+repeat. Tasks are linkable at `#TASK-12`.
+
+### Approving what cannot be undone
+
+When a run hits an approval gate, the gate appears on the task with the proposed
+changes rendered in full:
 
 ![Reviewing a changeset before it is applied](docs/ui-approval.png)
 
-Above: a run held at a gate. The agent proposed nine corrections, flagged one as
-an inference that could misroute mail, and left two clean records alone. Nothing
-has been written. Approving lets the next node apply exactly this and nothing
-else.
+Above: the agent proposed nine corrections, flagged one as an inference that
+could misroute mail, and left two clean records alone. Nothing has been written.
+Approving lets the next node apply exactly this and nothing else.
 
-![A completed run with its artifacts](docs/ui-run.png)
-
-Above: a finished run. Each node shows its cost, turns, and the summary it wrote
-for the node after it.
-
-It binds to loopback and has no login, because it is a window onto files you
-already own on a machine you are already sitting at. A run is linkable at
-`#<run-id>` if you want to point someone at one.
+The board binds to loopback and has no login, because it is a window onto files
+you already own on a machine you are already sitting at.
 
 ## Using skills and agents you already have
 
@@ -355,9 +367,10 @@ gates sit, and what each node hands on.
 
 ## Status
 
-Early. The scheduler, handoffs, gates, locks, ledger and resume are covered by
-tests (`npm test`). What is thinnest is breadth of real-world use: it has been
-exercised against a handful of pipelines, not hundreds.
+Early. The scheduler, handoffs, gates, locks, ledger, resume, discovery and the
+task board are covered by tests (`npm test`, 51 of them). What is thinnest is
+breadth of real-world use: it has been exercised against a handful of pipelines,
+not hundreds.
 
 Two things it does not do yet, both deliberate:
 
@@ -367,6 +380,8 @@ Two things it does not do yet, both deliberate:
   be worse than saying so.
 - **No multi-machine support.** Everything runs on the machine you start it on.
   The locks are local files, so two laptops will not see each other's.
+- **Single user.** The board has no login and no notion of who is who beyond the
+  username it records on your comments.
 
 ## Prior art
 

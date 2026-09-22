@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skillflow</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="brand"><span class="mark">sf</span><b>skillflow</b></div>
+    <button class="nav-item on" data-view="board">Board</button>
+    <button class="nav-item" data-view="runs">Runs</button>
+    <button class="nav-item" data-view="workflows">Workflows</button>
+    <div class="nav-sec">Library</div>
+    <button class="nav-item" data-view="agents">Agents</button>
+    <button class="nav-item" data-view="skills">Skills</button>
+    <div class="spacer"></div>
+    <div class="nav-foot" id="foot"></div>
+  </nav>
+  <main>
+    <header>
+      <h1 id="title">Board</h1>
+      <span class="count" id="count"></span>
+      <div class="spacer" style="flex:1"></div>
+      <button class="btn primary" id="new">New task</button>
+    </header>
+    <div id="view"></div>
+  </main>
+</div>
+<div id="overlay"></div>
+<script src="/app.js"></script>
+</body>
+</html>

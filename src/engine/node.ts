@@ -15,6 +15,12 @@ export interface RunNodeArgs {
   runInputs: Record<string, string>;
   ledger: Ledger;
   onEvent?: (line: string) => void;
+  /**
+   * Structured activity, so a consumer can tell the agent's own sentences from
+   * its tool calls. `onEvent` formats both into one log line, which is right for
+   * a terminal and wrong for anything that needs to treat them differently.
+   */
+  onActivity?: (event: { kind: 'text' | 'tool'; text: string; node: string }) => void;
 }
 
 /**
@@ -22,7 +28,7 @@ export interface RunNodeArgs {
  * stream events to the ledger, then validate what it produced.
  */
 export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
-  const { baseDir, runId, node, spec, renderedPrompt, upstream, runInputs, ledger, onEvent } = args;
+  const { baseDir, runId, node, spec, renderedPrompt, upstream, runInputs, ledger, onEvent, onActivity } = args;
   const started = Date.now();
 
   const prepared = prepareNode(baseDir, runId, node, renderedPrompt, upstream, runInputs);
@@ -104,10 +110,12 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
             const text = block.text.trim();
             ledger.append({ type: 'node.text', node: node.id, text: text.slice(0, 2000) });
             onEvent?.(text.length > 160 ? `${text.slice(0, 160)}...` : text);
+            onActivity?.({ kind: 'text', text, node: node.id });
           } else if (block.type === 'tool_use') {
             const detail = summariseToolInput(block.input);
             ledger.append({ type: 'node.tool', node: node.id, tool: block.name, detail });
             onEvent?.(`  ${block.name}${detail ? ` ${detail}` : ''}`);
+            onActivity?.({ kind: 'tool', text: `${block.name}${detail ? ` ${detail}` : ''}`, node: node.id });
           }
         }
       } else if (message.type === 'result') {
