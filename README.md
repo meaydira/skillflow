@@ -242,6 +242,22 @@ deliberately no expression evaluation: a workflow file is executable
 configuration, and every extra capability is a new way for a shared workflow to
 surprise the person running it.
 
+## Cost
+
+Every node is a full Claude session, so cost scales with node count, not with how
+small each step looks. The three-node `hello-chain` above, which does almost
+nothing, runs about $2.20 end to end.
+
+Two things keep that down:
+
+- **Fewer, larger nodes.** Split a pipeline where a handoff or a gate genuinely
+  belongs, not to make each step tidy. Every split adds a session.
+- **`maxTurns` per node.** The default of 60 is a ceiling, not a target. A node
+  that reads two inputs and writes one output rarely needs more than 15.
+
+`skillflow status <id>` breaks cost down per node, which is usually enough to see
+which one is worth tuning.
+
 ## Scheduling
 
 skillflow has no scheduler of its own, on purpose. Use cron:
