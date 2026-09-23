@@ -86,7 +86,10 @@ function parseAssignee(value: unknown): Assignee | null {
 
 function discoverWorkflows(baseDir: string) {
   const out: Array<{ name: string; description: string; path: string; nodes: number }> = [];
-  for (const dir of ['workflows', 'examples']) {
+  // private-workflows is gitignored on purpose: it is where the ones with a
+  // company's real systems in them live, and they belong on the board as much
+  // as the shipped templates do.
+  for (const dir of ['workflows', 'private-workflows', 'examples']) {
     const full = join(baseDir, dir);
     if (!existsSync(full)) continue;
     for (const file of readdirSync(full)) {
