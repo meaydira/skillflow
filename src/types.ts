@@ -107,8 +107,19 @@ export interface NodeSpec {
   permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto';
   allowedTools?: string[];
   disallowedTools?: string[];
-  /** MCP server names (from the workflow's `connectors` block) this node needs. */
+  /**
+   * Connectors this node may use, by name: a claude.ai connector you are signed
+   * in to ("Airtable", "CData Connect AI"), or a server defined in the
+   * workflow's `connectors` block. Empty means every connected one.
+   */
   connectors?: string[];
+  /**
+   * What happens when the node calls a tool that changes something in a
+   * connector: `allow` it, `deny` it, or `ask` and wait for a person on the
+   * board. Reads never ask. Default is `ask`, because the alternative is an
+   * unattended agent with your CRM.
+   */
+  writes?: 'allow' | 'deny' | 'ask';
   /** Per-node timeouts in seconds. Fall back to workflow defaults. */
   timeoutSec?: number;
   idleTimeoutSec?: number;
@@ -133,6 +144,7 @@ export interface WorkflowSpec {
     idleTimeoutSec?: number;
     allowedTools?: string[];
     disallowedTools?: string[];
+    writes?: 'allow' | 'deny' | 'ask';
   };
   /** Max nodes in flight. Default 3. */
   concurrency?: number;
@@ -173,7 +185,10 @@ export type LedgerEvent =
   | { ts: string; type: 'node.skipped'; node: string; reason: string }
   | { ts: string; type: 'approval.requested'; node: string; prompt: string; when: ApprovalWhen }
   | { ts: string; type: 'approval.granted'; node: string; by: string; note?: string }
-  | { ts: string; type: 'approval.rejected'; node: string; by: string; note?: string };
+  | { ts: string; type: 'approval.rejected'; node: string; by: string; note?: string }
+  | { ts: string; type: 'permission.asked'; node: string; id: string; tool: string }
+  | { ts: string; type: 'permission.decided'; node: string; id: string; tool: string; status: 'allowed' | 'denied'; by: string; scope?: string }
+  | { ts: string; type: 'permission.denied'; node: string; tool: string; reason: string };
 
 export interface ApprovalRecord {
   runId: string;

@@ -8,7 +8,8 @@ import { decideApproval, pendingApprovals, readApproval } from '../engine/approv
 import { loadRunState } from '../engine/run.js';
 import { listRuns } from './status.js';
 import { runRoot } from '../engine/paths.js';
-import { findAgents, findSkills } from '../discover.js';
+import { cachedConnectors, findAgents, findConnectors, findSkills } from '../discover.js';
+import { decidePermission, pendingPermissions } from '../engine/permissions.js';
 import { loadWorkflow } from '../workflow/load.js';
 import {
   addComment,
@@ -79,7 +80,7 @@ function parseAssignee(value: unknown): Assignee | null {
   if (at === -1) return null;
   const kind = value.slice(0, at);
   const name = value.slice(at + 1);
-  if (!['agent', 'skill', 'workflow', 'human'].includes(kind) || !name) return null;
+  if (!['agent', 'skill', 'workflow', 'claude', 'human'].includes(kind) || !name) return null;
   return { kind: kind as Assignee['kind'], name };
 }
 
@@ -206,13 +207,31 @@ export function startUi(baseDir: string, port: number): Promise<string> {
 
     /* ------------------------------------------------------------ state */
     if (path === '/api/state') {
+      // Kick a refresh but answer from cache: discovery health-checks every
+      // server and takes seconds, and the board asks every few seconds.
+      void findConnectors();
+      const tasks = listTasks(baseDir).map((task) => ({
+        ...task,
+        needsYou: task.runs.reduce(
+          (n, runId) => n + pendingPermissions(baseDir, runId).length + pendingApprovals(baseDir, runId).length,
+          0,
+        ),
+      }));
       json(res, 200, {
-        tasks: listTasks(baseDir),
+        tasks,
         skills: findSkills(baseDir),
         agents: findAgents(baseDir),
         workflows: discoverWorkflows(baseDir),
+        connectors: cachedConnectors(),
         runs: listRuns(baseDir).slice(0, 60),
       });
+      return;
+    }
+
+    if (path === '/api/connectors') {
+      findConnectors({ maxAgeMs: url.searchParams.has('refresh') ? 0 : undefined })
+        .then((connectors) => json(res, 200, connectors))
+        .catch((err) => json(res, 500, { error: (err as Error).message }));
       return;
     }
 
@@ -231,6 +250,8 @@ export function startUi(baseDir: string, port: number): Promise<string> {
               status: TASK_STATUSES.includes(body.status as TaskStatus)
                 ? (body.status as TaskStatus)
                 : 'backlog',
+              connectors: Array.isArray(body.connectors) ? body.connectors.map(String) : [],
+              writes: ['allow', 'deny', 'ask'].includes(body.writes as string) ? (body.writes as never) : 'ask',
             }),
           );
         })
@@ -253,6 +274,7 @@ export function startUi(baseDir: string, port: number): Promise<string> {
           task,
           comments: listComments(baseDir, id),
           approvals: taskApprovals(baseDir, task.runs),
+          permissions: task.runs.flatMap((runId) => pendingPermissions(baseDir, runId)),
           artifacts: task.runs.flatMap((runId) => runArtifacts(baseDir, runId)),
           graph: task.runs.length > 0
             ? runGraph(baseDir, task.runs[task.runs.length - 1])
@@ -270,6 +292,8 @@ export function startUi(baseDir: string, port: number): Promise<string> {
             if (PRIORITIES.includes(body.priority as Priority)) next.priority = body.priority as Priority;
             if ('assignee' in body) next.assignee = parseAssignee(body.assignee);
             if (Array.isArray(body.resources)) next.resources = body.resources.map(String);
+            if (Array.isArray(body.connectors)) next.connectors = body.connectors.map(String);
+            if (['allow', 'deny', 'ask'].includes(body.writes as string)) next.writes = body.writes as never;
             if (Array.isArray(body.labels)) next.labels = body.labels.map(String);
             json(res, 200, saveTask(baseDir, next));
           })
@@ -407,6 +431,25 @@ export function startUi(baseDir: string, port: number): Promise<string> {
           approvals: pendingApprovals(baseDir, runId),
           events: new Ledger(baseDir, runId).read().slice(-400),
         });
+        return;
+      }
+
+      if (action === '/permission' && req.method === 'POST') {
+        readBody(req)
+          .then((body) => {
+            const id = String(body.id ?? '');
+            const status = body.status as 'allowed' | 'denied';
+            if (status !== 'allowed' && status !== 'denied') {
+              return json(res, 400, { error: 'status must be allowed or denied' });
+            }
+            const scope = body.scope === 'run' ? 'run' : 'once';
+            try {
+              json(res, 200, decidePermission(baseDir, runId, id, status, userInfo().username, scope, body.note as string | undefined));
+            } catch (err) {
+              json(res, 400, { error: (err as Error).message });
+            }
+          })
+          .catch(() => json(res, 400, { error: 'bad request body' }));
         return;
       }
 

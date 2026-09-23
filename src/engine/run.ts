@@ -19,6 +19,8 @@ export interface RunOptions {
   dryRun?: boolean;
   onLog?: (line: string) => void;
   onActivity?: (event: { kind: 'text' | 'tool'; text: string; node: string }) => void;
+  onPermission?: (request: import('./permissions.js').PermissionRequest) => void;
+  onPermissionDecided?: (request: import('./permissions.js').PermissionRequest) => void;
 }
 
 export interface RunSummary {
@@ -264,6 +266,8 @@ export async function executeRun(options: RunOptions): Promise<RunSummary> {
         ledger,
         onEvent: (line) => log(`      ${line}`),
         onActivity: options.onActivity,
+        onPermission: options.onPermission,
+        onPermissionDecided: options.onPermissionDecided,
       })
         .then((result) => {
           results.push(result);

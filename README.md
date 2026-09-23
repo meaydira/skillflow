@@ -257,6 +257,40 @@ skillflow resume <run-id>
 That is what lets a workflow run from cron at 6am and still have a human in it
 at 9am.
 
+## Connectors and permissions
+
+Every claude.ai connector you are signed in to is visible to a headless run. That
+is what makes your existing skills work unattended, and it is also the danger:
+an unattended agent with your CRM, your inbox and Slack is one bad inference
+away from a customer email.
+
+So skillflow does not bypass permissions the way coding-agent tools do (safe
+there only because git can undo anything). It classifies every connector call
+and applies a policy per task or step:
+
+- **Reads** go through without asking.
+- **Writes** are governed by `writes:` on the task or step:
+  - `ask` (the default): the agent stops at the call, the exact payload appears
+    on the task with **Allow once**, **Allow every &lt;tool&gt; this run** and
+    **Deny**, and the agent continues when you decide. Its watchdogs stand down
+    while it waits, so a long lunch does not kill the run.
+  - `allow`: writes go through. Use it for a skill you trust, and pair it with an
+    approval gate on the step.
+  - `deny`: the agent is told to report what it would have changed instead.
+- **Connectors** on a task or step restrict which servers it may touch at all,
+  reads included. Empty means any connected one.
+
+A denied call tells the agent not to try another route and to report what it
+would have changed, and in practice it does exactly that.
+
+What counts as a write is judged by tool name, deliberately broadly: anything not
+recognisably a read is treated as a write. The cost of gating a read is one
+click; the cost of waving through a write is a customer email.
+
+`skillflow` lists your connectors from `claude mcp list` and shows which need
+signing in again. That is done from a terminal with `claude mcp` or from the
+claude.ai connector settings, not from skillflow.
+
 ## Resource locks
 
 ```yaml
@@ -328,7 +362,8 @@ nodes:
     needs: [other]     # upstream nodes; their artifacts are handed over
     readonly: true     # documents that this node cannot change anything
     resources: []      # logical locks
-    connectors: []     # which connectors this node may use
+    connectors: []     # connectors it may use, by name; empty means any
+    writes: ask        # ask | allow | deny, for calls that change something
     if: "${{ inputs.limit }}"   # falsy skips the node, and its dependents
     retries: 0
     approval:
@@ -398,10 +433,12 @@ not hundreds.
 
 Two things it does not do yet, both deliberate:
 
-- **No connector credential management.** You point `connectors` at MCP servers
-  you have already configured. Remote servers behind interactive OAuth are the
-  genuine hard part of running agents unattended, and pretending otherwise would
-  be worse than saying so.
+- **No connector sign-in.** skillflow uses the connectors your Claude Code is
+  already signed in to and tells you which ones need re-authorising, but the
+  OAuth itself happens in Claude Code or on claude.ai, not here.
+- **A run waiting on a permission dies with the app.** The request stays on
+  disk, but the agent process does not survive a quit. Resume re-runs that step
+  from the start.
 - **No multi-machine support.** Everything runs on the machine you start it on.
   The locks are local files, so two laptops will not see each other's.
 - **Single user.** The board has no login and no notion of who is who beyond the

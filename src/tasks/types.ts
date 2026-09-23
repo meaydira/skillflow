@@ -40,7 +40,7 @@ export const PRIORITIES: Priority[] = ['urgent', 'high', 'medium', 'low', 'none'
  * runs the whole graph; a human means nobody automated is going to touch it.
  */
 export interface Assignee {
-  kind: 'agent' | 'skill' | 'workflow' | 'human';
+  kind: 'agent' | 'skill' | 'workflow' | 'claude' | 'human';
   name: string;
 }
 
@@ -54,6 +54,10 @@ export interface Task {
   labels: string[];
   /** Logical resources this task's work touches, passed to the run as locks. */
   resources: string[];
+  /** Connectors the agent may use. Empty means every connected one. */
+  connectors: string[];
+  /** What happens when the agent tries to change something through a connector. */
+  writes: 'allow' | 'deny' | 'ask';
   /** Run ids this task has produced, oldest first. */
   runs: string[];
   createdAt: string;
@@ -67,6 +71,8 @@ export interface Task {
 export type CommentKind =
   /** A person talking. */
   | 'comment'
+  /** The agent asking to make a change, waiting on a person. */
+  | 'permission'
   /** A person sending work back with changes requested. */
   | 'feedback'
   /** The agent reporting as it goes. */

@@ -22,6 +22,8 @@ export interface StepInput {
   outputKind?: 'document' | 'records' | 'note' | 'ref' | 'changeset';
   readonly?: boolean;
   resources?: string[];
+  connectors?: string[];
+  writes?: 'allow' | 'deny' | 'ask';
   approval?: { when: 'before' | 'after'; prompt: string } | null;
 }
 
@@ -103,6 +105,8 @@ export function buildWorkflowYaml(input: WorkflowInput): string {
       ...(needs.length > 0 ? { needs } : {}),
       ...(step.readonly ? { readonly: true } : {}),
       ...(step.resources && step.resources.length > 0 ? { resources: step.resources } : {}),
+      ...(step.connectors && step.connectors.length > 0 ? { connectors: step.connectors } : {}),
+      ...(step.writes && step.writes !== 'ask' ? { writes: step.writes } : {}),
       ...(step.approval ? { approval: { when: step.approval.when, prompt: step.approval.prompt } } : {}),
       prompt: step.prompt.trim(),
       outputs: [
@@ -167,6 +171,8 @@ export function workflowToInput(baseDir: string, relative: string): WorkflowInpu
       outputKind: node.outputs[0]?.kind ?? 'note',
       readonly: node.readonly,
       resources: node.resources,
+      connectors: node.connectors,
+      writes: node.writes ?? 'ask',
       approval: node.approval ? { when: node.approval.when ?? 'after', prompt: node.approval.prompt } : null,
     })),
   };

@@ -47,7 +47,7 @@ export function listTasks(baseDir: string): Task[] {
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.json') || file.endsWith('.tmp')) continue;
     try {
-      tasks.push(JSON.parse(readFileSync(join(dir, file), 'utf8')) as Task);
+      tasks.push(withDefaults(JSON.parse(readFileSync(join(dir, file), 'utf8')) as Task));
     } catch {
       // A task we cannot parse is reported by its absence rather than crashing
       // the board. The file is still on disk for a human to look at.
@@ -60,10 +60,21 @@ export function getTask(baseDir: string, id: string): Task | null {
   const file = taskPath(baseDir, id);
   if (!existsSync(file)) return null;
   try {
-    return JSON.parse(readFileSync(file, 'utf8')) as Task;
+    return withDefaults(JSON.parse(readFileSync(file, 'utf8')) as Task);
   } catch {
     return null;
   }
+}
+
+/** Tasks written before a field existed read as if it had its default. */
+function withDefaults(task: Task): Task {
+  return {
+    ...task,
+    connectors: task.connectors ?? [],
+    writes: task.writes ?? 'ask',
+    resources: task.resources ?? [],
+    labels: task.labels ?? [],
+  };
 }
 
 export function saveTask(baseDir: string, task: Task): Task {
@@ -92,6 +103,8 @@ export interface CreateTaskInput {
   assignee?: Assignee | null;
   labels?: string[];
   resources?: string[];
+  connectors?: string[];
+  writes?: 'allow' | 'deny' | 'ask';
   prefix?: string;
 }
 
@@ -110,6 +123,8 @@ export function createTask(baseDir: string, input: CreateTaskInput): Task {
     assignee: input.assignee ?? null,
     labels: input.labels ?? [],
     resources: input.resources ?? [],
+    connectors: input.connectors ?? [],
+    writes: input.writes ?? 'ask',
     runs: [],
     createdAt: now,
     updatedAt: now,

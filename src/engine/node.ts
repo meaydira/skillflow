@@ -1,4 +1,12 @@
-import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type SDKMessage, type PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import {
+  awaitDecision,
+  decide,
+  parseMcpTool,
+  requestPermission,
+  type PermissionRequest,
+  type ToolPolicy,
+} from './permissions.js';
 import type { Artifact, NodeSpec, NodeResult } from '../types.js';
 import type { ParsedWorkflow } from '../workflow/schema.js';
 import { collectOutputs } from './artifacts.js';
@@ -21,6 +29,10 @@ export interface RunNodeArgs {
    * a terminal and wrong for anything that needs to treat them differently.
    */
   onActivity?: (event: { kind: 'text' | 'tool'; text: string; node: string }) => void;
+  /** The agent wants to make a change and is now waiting on a person. */
+  onPermission?: (request: PermissionRequest) => void;
+  /** A person decided, and the agent is moving again. */
+  onPermissionDecided?: (request: PermissionRequest) => void;
 }
 
 /**
@@ -28,7 +40,10 @@ export interface RunNodeArgs {
  * stream events to the ledger, then validate what it produced.
  */
 export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
-  const { baseDir, runId, node, spec, renderedPrompt, upstream, runInputs, ledger, onEvent, onActivity } = args;
+  const {
+    baseDir, runId, node, spec, renderedPrompt, upstream, runInputs, ledger,
+    onEvent, onActivity, onPermission, onPermissionDecided,
+  } = args;
   const started = Date.now();
 
   const prepared = prepareNode(baseDir, runId, node, renderedPrompt, upstream, runInputs);
@@ -40,18 +55,22 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
   const abort = new AbortController();
   let timedOutReason: string | null = null;
 
+  let hardTimerRef: NodeJS.Timeout | null = null;
   const hardTimer = setTimeout(() => {
     timedOutReason = `exceeded its ${Math.round(timeoutMs / 1000)}s wall-clock budget`;
     abort.abort();
   }, timeoutMs);
+  hardTimerRef = hardTimer;
 
   // The idle watchdog answers a different question from the wall-clock one:
   // "has this gone quiet?" rather than "has this run long?". A node that keeps
   // emitting is working, however long it takes, and killing it for duration
   // alone is how you lose an hour of real progress.
   let idleTimer: NodeJS.Timeout;
+  let waitingOnHuman = 0;
   const resetIdle = () => {
     clearTimeout(idleTimer);
+    if (waitingOnHuman > 0) return;
     idleTimer = setTimeout(() => {
       timedOutReason = `produced no output for ${Math.round(idleMs / 1000)}s`;
       abort.abort();
@@ -59,12 +78,91 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
   };
   resetIdle();
 
+  // While a person is deciding, silence is not the agent misbehaving. Both
+  // watchdogs stand down, and the wall clock restarts from the decision so a
+  // long lunch does not count against the run.
+  const holdWatchdogs = () => {
+    waitingOnHuman += 1;
+    clearTimeout(idleTimer);
+    if (hardTimerRef) clearTimeout(hardTimerRef);
+  };
+  const releaseWatchdogs = () => {
+    waitingOnHuman = Math.max(0, waitingOnHuman - 1);
+    if (waitingOnHuman > 0) return;
+    resetIdle();
+    hardTimerRef = setTimeout(() => {
+      timedOutReason = `exceeded its ${Math.round(timeoutMs / 1000)}s wall-clock budget`;
+      abort.abort();
+    }, timeoutMs);
+  };
+
   const connectors = buildConnectors(spec, node);
+
+  const policy: ToolPolicy = {
+    connectors: node.connectors ?? [],
+    writes: node.writes ?? spec.defaults?.writes ?? 'ask',
+  };
+  // Decisions a person scoped to the whole run, so approving the first of
+  // forty inserts does not mean approving forty times.
+  const allowedForRun = new Set<string>();
+
+  const canUseTool = async (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { signal: AbortSignal },
+  ): Promise<PermissionResult> => {
+    if (allowedForRun.has(toolName)) return { behavior: 'allow' };
+
+    const verdict = decide(policy, toolName);
+    if (verdict.kind === 'allow') return { behavior: 'allow' };
+    if (verdict.kind === 'deny') {
+      ledger.append({ type: 'permission.denied', node: node.id, tool: toolName, reason: verdict.reason });
+      onEvent?.(`  denied ${toolName}`);
+      return { behavior: 'deny', message: verdict.reason };
+    }
+
+    const request = requestPermission(baseDir, runId, node.id, toolName, input);
+    ledger.append({ type: 'permission.asked', node: node.id, id: request.id, tool: toolName });
+    onEvent?.(`  asking you about ${toolName}`);
+    onPermission?.(request);
+
+    holdWatchdogs();
+    let decided: PermissionRequest;
+    try {
+      decided = await awaitDecision(baseDir, runId, request.id, options.signal);
+    } finally {
+      releaseWatchdogs();
+    }
+
+    ledger.append({
+      type: 'permission.decided',
+      node: node.id,
+      id: request.id,
+      tool: toolName,
+      status: decided.status === 'allowed' ? 'allowed' : 'denied',
+      by: decided.by ?? 'skillflow',
+      scope: decided.scope,
+    });
+    onPermissionDecided?.(decided);
+
+    if (decided.status === 'allowed') {
+      if (decided.scope === 'run') allowedForRun.add(toolName);
+      return { behavior: 'allow' };
+    }
+    const tool = parseMcpTool(toolName)?.tool ?? toolName;
+    return {
+      behavior: 'deny',
+      message: decided.note
+        ? `${tool} was not allowed: ${decided.note}. Do not retry it another way; report what you would have changed.`
+        : `${tool} was not allowed by the person reviewing this task. Do not retry it another way; report what you would have changed.`,
+    };
+  };
 
   const options: Options = {
     cwd: prepared.dir,
     abortController: abort,
     permissionMode: node.permissionMode ?? defaults.permissionMode ?? 'acceptEdits',
+    canUseTool,
     model: node.model ?? defaults.model,
     maxTurns: node.maxTurns ?? defaults.maxTurns ?? 60,
     // 'user' picks up the skills already installed in ~/.claude/skills, which is
@@ -140,6 +238,7 @@ export async function runNode(args: RunNodeArgs): Promise<NodeResult> {
     hadError = timedOutReason ? `node ${timedOutReason}` : (err as Error).message;
   } finally {
     clearTimeout(hardTimer);
+    if (hardTimerRef) clearTimeout(hardTimerRef);
     clearTimeout(idleTimer!);
   }
 

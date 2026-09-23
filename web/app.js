@@ -84,9 +84,40 @@ function modal({ title, body, confirmLabel, onConfirm, width }) {
   });
 }
 
+/**
+ * Which connectors a task or step may touch. Unchecked ones are refused
+ * outright, reads included. None checked means every connected one, which is
+ * the forgiving default; narrowing it is what you do for a task that should
+ * never be able to see your inbox.
+ */
+function connectorChecks(prefix, selected) {
+  selected = selected || [];
+  if (state.connectors.length === 0) {
+    return '<div class="hint">Looking up your connectors...</div>';
+  }
+  return '<div class="checks">' + state.connectors.map((c) => {
+    const on = selected.includes(c.name) || selected.includes(c.key);
+    const off = c.status !== 'connected';
+    return '<label class="' + (off ? 'off' : '') + '" title="' + esc(c.url) + '">' +
+      '<input type="checkbox" class="' + prefix + '-conn" value="' + esc(c.name) + '"' +
+      (on ? ' checked' : '') + (off ? ' disabled' : '') + '> ' + esc(c.name) +
+      (off ? ' <span class="st">(' + (c.status === 'needs-auth' ? 'sign in' : c.status) + ')</span>' : '') +
+    '</label>';
+  }).join('') + '</div>' +
+  '<div class="hint" style="margin-top:5px">None ticked means any connected one.</div>';
+}
+
+function writesSelect(id, selected) {
+  return '<select id="' + id + '">' + WRITE_POLICIES.map(([v, label]) =>
+    '<option value="' + v + '"' + ((selected || 'ask') === v ? ' selected' : '') + '>' + label + '</option>').join('') +
+  '</select>';
+}
+
+const checked = (host, cls) => [...host.querySelectorAll('input.' + cls + ':checked')].map((i) => i.value);
+
 function runnerOptions(selected) {
   const sel = (v) => (v === selected ? ' selected' : '');
-  return '<option value=""' + sel('') + '>No agent (prompt only)</option>' +
+  return '<option value="claude:Claude"' + sel('claude:Claude') + '>Claude (prompt only)</option>' +
     '<optgroup label="Agents">' + state.agents.map((a) =>
       '<option value="agent:' + esc(a.name) + '"' + sel('agent:' + a.name) + '>' + esc(a.name) + '</option>').join('') +
     '</optgroup>' +
@@ -96,7 +127,12 @@ function runnerOptions(selected) {
 }
 
 /* -------------------------------------------------------------------- state */
-let state = { tasks: [], skills: [], agents: [], workflows: [], runs: [] };
+let state = { tasks: [], skills: [], agents: [], workflows: [], connectors: [], runs: [] };
+const WRITE_POLICIES = [
+  ['ask', 'Ask me before any change'],
+  ['allow', 'Allow changes without asking'],
+  ['deny', 'Never change anything'],
+];
 let view = 'board';
 let openTask = null;      // task id whose sheet is open
 let openDetail = null;    // its fetched detail
@@ -149,7 +185,7 @@ function renderBoard(el) {
   $('#count').textContent = live.length + (live.length === 1 ? ' task' : ' tasks');
 
   const key = JSON.stringify(live.map((t) => [t.id, t.status, t.order, t.title, t.priority,
-    t.assignee && t.assignee.name, t.activeRun]));
+    t.assignee && t.assignee.name, t.activeRun, t.needsYou]));
   if (key === lastBoardKey && el.querySelector('.board')) return;
   lastBoardKey = key;
 
@@ -180,8 +216,9 @@ function cardHtml(t) {
     ? '<span class="who"><span class="av' + (t.assignee.kind === 'human' ? ' human' : '') + '">' +
       esc(initials(assigneeLabel(t.assignee))) + '</span>' + esc(assigneeLabel(t.assignee)) + '</span>'
     : '<span class="who">unassigned</span>';
-  return '<article class="card" draggable="true" data-id="' + esc(t.id) + '">' +
-    '<div class="cid mono">' + esc(t.id) + '</div>' +
+  return '<article class="card' + (t.needsYou ? ' needs-you' : '') + '" draggable="true" data-id="' + esc(t.id) + '">' +
+    '<div class="cid mono">' + esc(t.id) +
+      (t.needsYou ? ' <span class="badge">needs you</span>' : '') + '</div>' +
     '<div class="ct">' + esc(t.title) + '</div>' +
     (t.description ? '<div class="cd">' + esc(t.description) + '</div>' : '') +
     '<div class="foot">' + who +
@@ -346,6 +383,10 @@ function workflowBuilder(existing) {
         '</span></label>' +
         '<textarea class="s-prompt" placeholder="What this step should do, and what it should hand on.">' +
           esc(step.prompt || '') + '</textarea></div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Connectors it may use</label>' + connectorChecks('s' + i, step.connectors || []) + '</div>' +
+        '<div class="field"><label>On changes</label>' + writesSelect('s-writes-' + i, step.writes || 'ask') + '</div>' +
+      '</div>' +
       '<label class="toggle"><input type="checkbox" class="s-gate"' +
         (step.approval ? ' checked' : '') + '> Ask me to approve before the next step runs</label>' +
     '</div>';
@@ -366,6 +407,8 @@ function workflowBuilder(existing) {
         name: el.querySelector('.s-name').value,
         runner: el.querySelector('.s-runner').value,
         prompt: el.querySelector('.s-prompt').value,
+        connectors: checked(el, 's' + i + '-conn'),
+        writes: el.querySelector('#s-writes-' + i).value,
         approval: el.querySelector('.s-gate').checked
           ? { when: 'after', prompt: 'Check this step before the next one runs.' }
           : null,
@@ -483,6 +526,19 @@ function drawSheet(d) {
       '>Me (no agent)</option>',
   ].join('');
 
+  const perms = (d.permissions || []).map((p) =>
+    '<div class="perm"><div class="ph"><span class="badge">needs you</span>' +
+      '<b>' + esc((p.tool.match(/^mcp__[A-Za-z0-9_]+?__(.+)$/) || [, p.tool])[1]) + '</b>' +
+      '<span class="conn">on ' + esc(p.connector.replace(/^claude_ai_/, '').replace(/_/g, ' ')) + '</span></div>' +
+      '<div style="font-size:13px;color:var(--muted)">The agent wants to make this change. It is paused until you decide.</div>' +
+      '<pre>' + esc(JSON.stringify(p.input, null, 2)) + '</pre>' +
+      '<div class="actions">' +
+        '<button class="btn primary" data-perm="' + esc(p.runId) + '|' + esc(p.id) + '|allowed|once">Allow once</button>' +
+        '<button class="btn" data-perm="' + esc(p.runId) + '|' + esc(p.id) + '|allowed|run">Allow every ' +
+          esc((p.tool.match(/^mcp__[A-Za-z0-9_]+?__(.+)$/) || [, p.tool])[1]) + ' this run</button>' +
+        '<button class="btn danger" data-perm="' + esc(p.runId) + '|' + esc(p.id) + '|denied|once">Deny</button>' +
+      '</div></div>').join('');
+
   const gates = (d.approvals || []).map((a) =>
     '<div class="gate"><b>Waiting on you: <span class="mono">' + esc(a.node) + '</span></b>' +
     '<p style="margin:6px 0">' + esc(a.prompt) + '</p>' +
@@ -544,7 +600,10 @@ function drawSheet(d) {
         '</select>' +
         '<label>Locks</label><input type="text" id="f-resources" value="' +
           esc((t.resources || []).join(', ')) + '" placeholder="crm:main, airtable:appXYZ">' +
+        '<label>On changes</label>' + writesSelect('f-writes', t.writes) +
       '</div>' +
+      '<div class="sec">Connectors it may use</div>' + connectorChecks('f', t.connectors) +
+      (perms ? '<div class="sec">Waiting on you</div>' + perms : '') +
       (gates ? '<div class="sec">Approval</div>' + gates : '') +
       '<div class="sec">Description</div>' +
       '<textarea id="f-description" placeholder="What needs doing, and what done looks like.">' +
@@ -585,6 +644,8 @@ function wireSheet(t) {
       priority: $('#f-priority').value,
       assignee: $('#f-assignee').value,
       resources: $('#f-resources').value.split(',').map((s) => s.trim()).filter(Boolean),
+      connectors: checked(document, 'f-conn'),
+      writes: $('#f-writes').value,
     });
     const status = $('#f-status').value;
     if (status !== t.status) await api('/tasks/' + id + '/move', 'POST', { status });
@@ -596,6 +657,18 @@ function wireSheet(t) {
   $('#f-status').onchange = save;
   $('#f-assignee').onchange = save;
   $('#f-priority').onchange = save;
+  $('#f-writes').onchange = save;
+  for (const c of document.querySelectorAll('input.f-conn')) c.onchange = save;
+
+  for (const b of document.querySelectorAll('[data-perm]')) {
+    b.onclick = async () => {
+      const [runId, id, status, scope] = b.dataset.perm.split('|');
+      for (const x of b.parentElement.querySelectorAll('button')) x.disabled = true;
+      await api('/runs/' + encodeURIComponent(runId) + '/permission', 'POST', { id, status, scope });
+      lastSheetKey = ''; lastBoardKey = '';
+      refresh();
+    };
+  }
 
   $('#run').onclick = async () => {
     $('#run').disabled = true;
@@ -663,6 +736,8 @@ async function newTask(status) {
         PRIORITIES.map((p) => '<option value="' + p + '"' + (p === 'none' ? ' selected' : '') + '>' + p + '</option>').join('') +
       '</select></div>' +
     '</div>' +
+    '<div class="field"><label>Connectors it may use</label>' + connectorChecks('t', []) + '</div>' +
+    '<div class="field"><label>When it wants to change something</label>' + writesSelect('t-writes', 'ask') + '</div>' +
     '<label class="toggle"><input type="checkbox" id="t-run"> Start it straight away</label>';
 
   const created = await modal({
@@ -682,6 +757,8 @@ async function newTask(status) {
         title,
         description: host.querySelector('#t-desc').value,
         status: startNow ? 'todo' : (status || 'backlog'),
+        connectors: checked(host, 't-conn'),
+        writes: host.querySelector('#t-writes').value,
       });
       await api('/tasks/' + encodeURIComponent(task.id), 'PATCH', {
         assignee,

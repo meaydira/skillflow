@@ -2,6 +2,7 @@ import { loadWorkflow, buildWorkflow } from '../workflow/load.js';
 import { workflowSchema } from '../workflow/schema.js';
 import { executeRun, newRunId } from '../engine/run.js';
 import { addComment, getTask, listComments, saveTask } from './store.js';
+import { parseMcpTool } from '../engine/permissions.js';
 import type { Task } from './types.js';
 
 /**
@@ -75,6 +76,8 @@ function buildTaskWorkflow(baseDir: string, task: Task) {
         ...(assignee?.kind === 'skill' ? { skill: assignee.name } : {}),
         ...(assignee?.kind === 'agent' ? { agent: assignee.name } : {}),
         resources: task.resources ?? [],
+        connectors: task.connectors ?? [],
+        writes: task.writes ?? 'ask',
         prompt: composePrompt(baseDir, task),
         outputs: [
           {
@@ -151,6 +154,34 @@ export function runTask(
       if (text.length < 40) return;
       posted += 1;
       addComment(baseDir, taskId, assignee.name, 'progress', text, runId);
+      onChange?.();
+    },
+    onPermission: (request) => {
+      const mcp = parseMcpTool(request.tool);
+      const where = mcp ? `${mcp.connector.replace(/^claude_ai_/, '').replace(/_/g, ' ')}` : '';
+      addComment(
+        baseDir,
+        taskId,
+        assignee.name,
+        'permission',
+        `Wants to run **${mcp?.tool ?? request.tool}**${where ? ` on ${where}` : ''}. Waiting for you.`,
+        runId,
+      );
+      onChange?.();
+    },
+    onPermissionDecided: (request) => {
+      const mcp = parseMcpTool(request.tool);
+      const verb = request.status === 'allowed'
+        ? (request.scope === 'run' ? 'allowed, and every later call to it in this run' : 'allowed')
+        : 'denied';
+      addComment(
+        baseDir,
+        taskId,
+        request.by ?? 'skillflow',
+        'system',
+        `${mcp?.tool ?? request.tool} ${verb}${request.note ? `: ${request.note}` : '.'}`,
+        runId,
+      );
       onChange?.();
     },
   })

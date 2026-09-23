@@ -223,3 +223,20 @@ table.lib td.d { color: var(--muted); }
   margin: 0 0 0 20px; padding: 5px 0 5px 16px; border-left: 2px solid var(--line);
   color: var(--muted); font-size: 12px;
 }
+
+/* ------------------------------------------------------------- permissions */
+.perm { border: 1px solid var(--warn); border-radius: 9px; padding: 12px 13px; background: var(--panel); margin-bottom: 10px; }
+.perm .ph { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.perm .ph b { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.perm .ph .conn { color: var(--muted); font-size: 12px; }
+.perm pre { max-height: 220px; margin: 6px 0 0; }
+.badge {
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+  background: var(--warn); color: #1b1a18; letter-spacing: .02em;
+}
+.card.needs-you { border-color: var(--warn); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.checks label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink); cursor: pointer; }
+.checks label.off { color: var(--muted); }
+.checks input { width: auto; margin: 0; }
+.checks .st { font-size: 10px; color: var(--muted); }

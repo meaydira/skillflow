@@ -48,13 +48,6 @@ export function loadWorkflow(file: string): LoadedWorkflow {
         throw new WorkflowError(`node "${node.id}" depends on itself`);
       }
     }
-    for (const conn of node.connectors) {
-      if (!(conn in spec.connectors)) {
-        throw new WorkflowError(
-          `node "${node.id}" wants connector "${conn}", which is not defined in the workflow's connectors block`,
-        );
-      }
-    }
   }
 
   return buildWorkflow(spec, path);
@@ -174,6 +167,13 @@ export function lintWorkflow(wf: LoadedWorkflow, providedInputs: Record<string, 
         node: node.id,
         message:
           'touches an external system but declares no `resources` lock (add one, or mark the node `readonly: true`)',
+      });
+    }
+
+    if (node.writes === 'allow' && !node.approval && !node.readonly) {
+      warnings.push({
+        node: node.id,
+        message: 'allows connector writes unattended with no approval gate',
       });
     }
 

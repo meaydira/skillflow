@@ -198,3 +198,77 @@ export function findAgents(cwd = process.cwd()): Discovered[] {
     ...plugins,
   ]);
 }
+
+/* ---------------------------------------------------------------- connectors */
+
+import { execFile } from 'node:child_process';
+
+export interface Connector {
+  /** As `claude mcp list` prints it: "CData Connect AI". */
+  name: string;
+  /** The prefix its tools carry: "claude_ai_CData_Connect_AI". */
+  key: string;
+  url: string;
+  status: 'connected' | 'needs-auth' | 'failed' | 'unknown';
+}
+
+let connectorCache: { at: number; value: Connector[] } | null = null;
+let connectorInflight: Promise<Connector[]> | null = null;
+
+/**
+ * The connectors this machine's Claude Code can reach, from `claude mcp list`.
+ *
+ * That command health-checks every server and takes several seconds, so the
+ * result is cached and refreshed in the background: the board asks often, the
+ * answer changes rarely, and nobody should wait seven seconds for a picker.
+ */
+export function findConnectors(options: { maxAgeMs?: number; claudeBinary?: string } = {}): Promise<Connector[]> {
+  const maxAge = options.maxAgeMs ?? 5 * 60 * 1000;
+  if (connectorCache && Date.now() - connectorCache.at < maxAge) {
+    return Promise.resolve(connectorCache.value);
+  }
+  if (connectorInflight) return connectorInflight;
+
+  const bin = options.claudeBinary ?? process.env.SKILLFLOW_CLAUDE_PATH ?? 'claude';
+  connectorInflight = new Promise<Connector[]>((resolve) => {
+    execFile(bin, ['mcp', 'list'], { timeout: 60_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+      connectorInflight = null;
+      if (err && !stdout) {
+        // Keep whatever we last knew rather than blanking the picker on a
+        // transient failure.
+        resolve(connectorCache?.value ?? []);
+        return;
+      }
+      const value = parseMcpList(String(stdout));
+      connectorCache = { at: Date.now(), value };
+      resolve(value);
+    });
+  });
+  return connectorInflight;
+}
+
+export function cachedConnectors(): Connector[] {
+  return connectorCache?.value ?? [];
+}
+
+/** Lines look like: `claude.ai Airtable: https://mcp.airtable.com/mcp - ✔ Connected`. */
+export function parseMcpList(output: string): Connector[] {
+  const out: Connector[] = [];
+  for (const raw of output.split('\n')) {
+    const line = raw.trim();
+    const match = /^(?:(claude\.ai)\s+)?(.+?):\s+(\S+)\s+-\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const [, scope, name, url, statusText] = match;
+    if (!/^https?:\/\//.test(url) && !/^[\w.-]+$/.test(url)) continue;
+    const status: Connector['status'] = /connected/i.test(statusText) && !/needs|fail/i.test(statusText)
+      ? 'connected'
+      : /auth/i.test(statusText)
+        ? 'needs-auth'
+        : /fail|error/i.test(statusText)
+          ? 'failed'
+          : 'unknown';
+    const flat = name.trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    out.push({ name: name.trim(), key: scope ? `claude_ai_${flat}` : flat, url, status });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}

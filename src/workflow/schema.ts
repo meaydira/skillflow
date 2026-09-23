@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const artifactKind = z.enum(['document', 'records', 'note', 'ref', 'changeset']);
 
+const writePolicy = z.enum(['allow', 'deny', 'ask']);
+
 const permissionMode = z.enum([
   'default',
   'acceptEdits',
@@ -43,6 +45,7 @@ const nodeSpec = z.object({
   allowedTools: z.array(z.string()).optional(),
   disallowedTools: z.array(z.string()).optional(),
   connectors: z.array(z.string()).default([]),
+  writes: writePolicy.optional(),
   timeoutSec: z.number().int().positive().optional(),
   idleTimeoutSec: z.number().int().positive().optional(),
   retries: z.number().int().min(0).default(0),
@@ -72,6 +75,7 @@ export const workflowSchema = z.object({
       idleTimeoutSec: z.number().int().positive().optional(),
       allowedTools: z.array(z.string()).optional(),
       disallowedTools: z.array(z.string()).optional(),
+      writes: writePolicy.optional(),
     })
     .default({}),
   concurrency: z.number().int().positive().default(3),
