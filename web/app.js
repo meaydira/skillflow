@@ -510,6 +510,11 @@ function drawSheet(d) {
   const t = d.task;
   const options = [
     '<option value="">Unassigned</option>',
+    // A select with no option matching the stored value falls back to its
+    // first one, and the next save would write that back. So every kind that
+    // can be stored must be offerable here.
+    '<option value="claude:Claude"' + (t.assignee && t.assignee.kind === 'claude' ? ' selected' : '') +
+      '>Claude (prompt only)</option>',
     '<optgroup label="Agents">' + state.agents.map((a) =>
       '<option value="agent:' + esc(a.name) + '"' +
       (t.assignee && t.assignee.kind === 'agent' && t.assignee.name === a.name ? ' selected' : '') +
